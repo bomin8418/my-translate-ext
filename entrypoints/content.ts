@@ -96,7 +96,7 @@ let bubbleElement: HTMLDivElement | null = null;
 let toggleButton: HTMLDivElement | null = null;
 
 /** 已翻译的文本节点集合（用于避免重复翻译） */
-const translatedNodes = new WeakSet<Node>();
+let translatedNodes = new WeakSet<Node>();
 
 /** 全文翻译是否正在进行中 */
 let isFullPageTranslating = false;
@@ -1124,16 +1124,14 @@ function removeAllTranslations(): void {
   isFullPageTranslating = false;
   batchIndex = 0;
   pendingTextNodes = [];
+  // 替换为新 WeakSet，清空已翻译节点记录
+  translatedNodes = new WeakSet<Node>();
 
   // 移除所有译文容器
   const containers = document.querySelectorAll('[data-trans-ext="translation"]');
   containers.forEach((el) => el.remove());
 
   logger.info('已移除所有译文', { count: containers.length });
-
-  // 清除已翻译节点记录
-  // WeakSet 无法直接清空，我们依赖新实例
-  // translatedNodes 会在下次翻译时重新收集
 }
 
 // ==================== MutationObserver（SPA 支持） ====================
