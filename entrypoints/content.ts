@@ -199,8 +199,8 @@ function handleStreamChunk(message: StreamChunkMessage): void {
   if (message.requestId !== activeRequestId) return;
 
   // 更新翻译气泡的内容
-  if (bubbleElement) {
-    const contentEl = bubbleElement.querySelector('.trans-bubble-content');
+  if (bubbleElement?.shadowRoot) {
+    const contentEl = bubbleElement.shadowRoot.querySelector('.trans-bubble-content');
     if (contentEl) {
       // 追加增量文本
       contentEl.textContent = (contentEl.textContent || '') + message.content;
@@ -223,13 +223,13 @@ function handleStreamDone(message: StreamDoneMessage): void {
   logger.info('划词翻译完成', { length: message.fullText.length });
 
   // 更新气泡显示完整翻译
-  if (bubbleElement) {
-    const contentEl = bubbleElement.querySelector('.trans-bubble-content');
+  if (bubbleElement?.shadowRoot) {
+    const contentEl = bubbleElement.shadowRoot.querySelector('.trans-bubble-content');
     if (contentEl) {
       contentEl.textContent = message.fullText;
     }
     // 移除加载动画
-    const loadingEl = bubbleElement.querySelector('.trans-bubble-loading');
+    const loadingEl = bubbleElement.shadowRoot.querySelector('.trans-bubble-loading');
     if (loadingEl) {
       loadingEl.remove();
     }
@@ -248,13 +248,13 @@ function handleStreamError(message: StreamErrorMessage): void {
   activeRequestId = null;
   logger.error('划词翻译失败', { message: message.message });
 
-  if (bubbleElement) {
-    const contentEl = bubbleElement.querySelector('.trans-bubble-content');
+  if (bubbleElement?.shadowRoot) {
+    const contentEl = bubbleElement.shadowRoot.querySelector('.trans-bubble-content');
     if (contentEl) {
       contentEl.textContent = `❌ ${message.message}`;
       contentEl.classList.add('trans-error');
     }
-    const loadingEl = bubbleElement.querySelector('.trans-bubble-loading');
+    const loadingEl = bubbleElement.shadowRoot.querySelector('.trans-bubble-loading');
     if (loadingEl) {
       loadingEl.remove();
     }
