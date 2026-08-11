@@ -672,16 +672,45 @@ function hideBubble(): void {
 /** 翻译气泡的 Shadow DOM 样式 */
 function getBubbleStyles(): string {
   return `
+    :host {
+      /* Light theme (default) */
+      --bubble-bg: #ffffff;
+      --bubble-text: #374151;
+      --bubble-header-bg: #f9fafb;
+      --bubble-border: #e5e7eb;
+      --bubble-title: #6b7280;
+      --bubble-close: #9ca3af;
+      --bubble-close-hover-bg: #e5e7eb;
+      --bubble-close-hover-text: #374151;
+      --bubble-dot: #9ca3af;
+      --bubble-shadow: 0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.08);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :host {
+        --bubble-bg: #1e1e1e;
+        --bubble-text: #d4d4d4;
+        --bubble-header-bg: #2d2d2d;
+        --bubble-border: #404040;
+        --bubble-title: #9ca3af;
+        --bubble-close: #6b7280;
+        --bubble-close-hover-bg: #404040;
+        --bubble-close-hover-text: #e5e7eb;
+        --bubble-dot: #6b7280;
+        --bubble-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.3);
+      }
+    }
+
     .trans-bubble {
       width: 320px;
       max-height: 200px;
-      background: #ffffff;
+      background: var(--bubble-bg);
       border-radius: 12px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.08);
+      box-shadow: var(--bubble-shadow);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       font-size: 14px;
       overflow: hidden;
-      border: 1px solid #e5e7eb;
+      border: 1px solid var(--bubble-border);
       animation: transFadeIn 0.2s ease-out;
     }
 
@@ -695,14 +724,14 @@ function getBubbleStyles(): string {
       justify-content: space-between;
       align-items: center;
       padding: 8px 12px;
-      background: #f9fafb;
-      border-bottom: 1px solid #e5e7eb;
+      background: var(--bubble-header-bg);
+      border-bottom: 1px solid var(--bubble-border);
     }
 
     .trans-bubble-title {
       font-size: 12px;
       font-weight: 600;
-      color: #6b7280;
+      color: var(--bubble-title);
       text-transform: uppercase;
       letter-spacing: 0.5px;
     }
@@ -711,7 +740,7 @@ function getBubbleStyles(): string {
       background: none;
       border: none;
       font-size: 18px;
-      color: #9ca3af;
+      color: var(--bubble-close);
       cursor: pointer;
       padding: 0 4px;
       line-height: 1;
@@ -720,15 +749,15 @@ function getBubbleStyles(): string {
     }
 
     .trans-bubble-close:hover {
-      color: #374151;
-      background: #e5e7eb;
+      color: var(--bubble-close-hover-text);
+      background: var(--bubble-close-hover-bg);
     }
 
     .trans-bubble-content {
       padding: 12px;
       max-height: 150px;
       overflow-y: auto;
-      color: #374151;
+      color: var(--bubble-text);
       line-height: 1.6;
       white-space: pre-wrap;
       word-break: break-word;
@@ -747,7 +776,7 @@ function getBubbleStyles(): string {
 
     .trans-dot {
       font-size: 8px;
-      color: #9ca3af;
+      color: var(--bubble-dot);
       animation: transPulseDot 1.4s infinite;
     }
 
@@ -926,8 +955,19 @@ async function translateAndInsert(
     const requestId = generateRequestId();
     const port = ensurePort();
 
+    // 读取父元素计算颜色，传入 Shadow DOM 使译文与页面颜色一致
+    const parentElement = textNode.parentElement;
+    const parentStyle = parentElement ? getComputedStyle(parentElement) : null;
+    const parentColor = parentStyle?.color;
+    const parentBgColor = parentStyle?.backgroundColor;
+
     // 创建译文容器（使用 Shadow DOM 隔离样式）
-    const translationContainer = createTranslationContainer();
+    const translationContainer = createTranslationContainer(
+      parentColor,
+      parentBgColor === 'rgba(0, 0, 0, 0)' || parentBgColor === 'transparent'
+        ? undefined
+        : parentBgColor,
+    );
     const translationShadow = translationContainer.shadowRoot!;
     const contentEl = translationShadow.querySelector('.trans-content')!;
 
@@ -990,9 +1030,20 @@ async function translateAndInsert(
  *     </div>
  * </div>
  */
-function createTranslationContainer(): HTMLElement {
+function createTranslationContainer(
+  parentColor?: string,
+  parentBgColor?: string,
+): HTMLElement {
   const container = document.createElement('div');
   container.setAttribute('data-trans-ext', 'translation');
+
+  // 将父元素的计算颜色传入 Shadow DOM，使译文颜色与原页面一致
+  if (parentColor) {
+    container.style.setProperty('--trans-parent-color', parentColor);
+  }
+  if (parentBgColor) {
+    container.style.setProperty('--trans-parent-bg', parentBgColor);
+  }
 
   const shadow = container.attachShadow({ mode: 'open' });
   shadow.innerHTML = `
@@ -1017,15 +1068,16 @@ function getTranslationStyles(): string {
       margin: 4px 0 8px 0;
       padding: 4px 8px;
       border-left: 3px solid #10b981;
-      background: rgba(16, 185, 129, 0.04);
       border-radius: 0 4px 4px 0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       font-size: 14px;
       line-height: 1.6;
+      /* 背景和文字颜色通过宿主元素的 CSS 自定义属性传入，继承自原页面 */
+      background: var(--trans-parent-bg, transparent);
+      color: var(--trans-parent-color, #374151);
     }
 
     .trans-content {
-      color: #374151;
       white-space: pre-wrap;
       word-break: break-word;
     }
