@@ -30,7 +30,7 @@ export default defineConfig({
       },
     ],
 
-    // 工具栏图标：点击直接打开设置页
+    // 工具栏图标：点击直接打开完整设置页（新标签页）
     action: {
       default_title: '个人专属翻译助手 - 设置',
       default_icon: {
@@ -40,7 +40,11 @@ export default defineConfig({
         '96': 'icon/96.png',
         '128': 'icon/128.png',
       },
-      default_popup: 'options.html',
+    },
+
+    // 设置页在完整浏览器标签页中打开（而非受限宽度的嵌入式选项页）
+    options_ui: {
+      open_in_tab: true,
     },
   },
 });

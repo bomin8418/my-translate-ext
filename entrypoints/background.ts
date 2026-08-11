@@ -48,6 +48,14 @@ export default {
       logger.info('扩展已安装/更新');
     });
 
+    // ==================== 工具栏图标点击 ====================
+
+    // 点击工具栏图标时，直接在新标签页打开完整的设置页
+    chrome.action.onClicked.addListener(() => {
+      logger.info('工具栏图标被点击，打开设置页');
+      chrome.runtime.openOptionsPage();
+    });
+
     // ==================== 消息监听 ====================
 
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
