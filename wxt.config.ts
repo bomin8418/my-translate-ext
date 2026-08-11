@@ -29,5 +29,18 @@ export default defineConfig({
         matches: ['<all_urls>'],
       },
     ],
+
+    // 工具栏图标：点击直接打开设置页
+    action: {
+      default_title: '个人专属翻译助手 - 设置',
+      default_icon: {
+        '16': 'icon/16.png',
+        '32': 'icon/32.png',
+        '48': 'icon/48.png',
+        '96': 'icon/96.png',
+        '128': 'icon/128.png',
+      },
+      default_popup: 'options.html',
+    },
   },
 });

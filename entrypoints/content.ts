@@ -31,6 +31,8 @@ const logger = createLogger('翻译扩展');
 export default {
   // 匹配所有 HTTP/HTTPS 页面和本地文件
   matches: ['*://*/*', 'file://*/*'],
+  // 只在主框架注入，避免 iframe 里悬浮按钮重复
+  allFrames: false,
   // 在页面加载完成后尽早运行
   runAt: 'document_end' as const,
 
