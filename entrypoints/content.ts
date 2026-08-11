@@ -39,14 +39,8 @@ export default {
    * WXT 会在页面加载完成后调用此函数
    */
   main(_ctx: ContentScriptContext) {
-    // 仅在浏览器环境中执行初始化（Node.js 构建时 MutationObserver 不可用）
-    if (typeof MutationObserver !== 'undefined') {
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
-      } else {
-        init();
-      }
-    }
+    // 启动逻辑已移至本函数末尾，确保所有 const/let 声明先于 init() 执行，
+    // 避免暂时性死区（TDZ）导致 "Cannot access 'X' before initialization"
 
 // ==================== 常量定义 ====================
 
@@ -1149,7 +1143,14 @@ function generateRequestId(): string {
 
 // ==================== 启动 ====================
 
-// 启动逻辑已在 main() 函数顶部处理
-// 参见 main() 函数中的 MutationObserver 检查和 init() 调用
+// 仅在浏览器环境中执行初始化（Node.js 构建时 MutationObserver 不可用）。
+// 必须放在所有 const/let/function 声明之后，否则 init() 引用的变量尚处于 TDZ。
+if (typeof MutationObserver !== 'undefined') {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+}
   },
 };
