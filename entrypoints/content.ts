@@ -113,18 +113,20 @@ let fullPageDebounceTimer: ReturnType<typeof setTimeout> | null = null;
  * Content Script 入口
  * 页面加载完成后初始化所有功能
  */
-function init(): void {
+async function init(): Promise<void> {
   // 检查是否为 PDF 页面（PDF 页面由专门的 PDF 查看器处理）
   if (isPdfPage()) {
     logger.info('当前为 PDF 页面，跳过 Content Script 初始化');
     return;
   }
 
-  // 从存储中恢复之前的翻译模式
-  restoreMode();
+  // 从存储中恢复之前的翻译模式（必须 await，确保模式就绪后再创建按钮）
+  await restoreMode();
 
   // 创建悬浮按钮
   createToggleButton();
+  // 恢复后同步按钮外观
+  updateToggleButtonAppearance();
 
   // 设置划词翻译事件监听
   setupSelectionListener();
@@ -945,14 +947,14 @@ async function translateAndInsert(
   // 检查节点是否仍在 DOM 中
   if (!textNode.parentNode) return;
 
+  const requestId = generateRequestId();
+
   try {
     // 截断过长文本
     const truncatedText = text.length > MAX_CHUNK_LENGTH
       ? text.slice(0, MAX_CHUNK_LENGTH) + '...'
       : text;
 
-    // 通过 Port 发送翻译请求
-    const requestId = generateRequestId();
     const port = ensurePort();
 
     // 读取父元素计算颜色，传入 Shadow DOM 使译文与页面颜色一致
@@ -1011,8 +1013,13 @@ async function translateAndInsert(
       targetLang: 'Chinese',
       requestId,
     });
-  } catch {
-    // 翻译失败，静默处理
+  } catch (err) {
+    // 翻译失败，记录日志便于排查
+    logger.error('节点翻译异常', {
+      requestId,
+      textLength: text.length,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
