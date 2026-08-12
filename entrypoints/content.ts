@@ -1122,13 +1122,17 @@ async function translateAndInsert(unit: TranslationUnit): Promise<void> {
     // 发送流式翻译请求
     let fullTranslation = '';
 
+    // 行内模式需强制单行：模型的 prompt 已要求单行，此处兜底替换
+    const sanitizeDisplay = (t: string): string =>
+      isInline ? t.replace(/\n+/g, ' ') : t;
+
     // 监听翻译响应
     const messageHandler = (message: ContentMessage) => {
       if (message.type === 'chunk' && message.requestId === requestId) {
         fullTranslation += message.content;
-        contentEl.textContent = fullTranslation;
+        contentEl.textContent = sanitizeDisplay(fullTranslation);
       } else if (message.type === 'done' && message.requestId === requestId) {
-        contentEl.textContent = message.fullText;
+        contentEl.textContent = sanitizeDisplay(message.fullText);
         // 仅块级模式有加载动画需要移除
         if (!isInline) {
           const loadingEl = translationShadow.querySelector('.trans-loading');
