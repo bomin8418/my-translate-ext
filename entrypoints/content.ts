@@ -410,8 +410,8 @@ async function restoreMode(): Promise<void> {
       logger.info('恢复翻译模式', { mode: currentMode });
       // 如果之前是全文模式，重新开始翻译
       if (currentMode === TranslationMode.FULL_PAGE) {
-        logger.info('之前为全文模式，重新开始翻译');
-        startFullPageTranslation();
+        logger.info('之前为全文模式，等待页面加载完成后重新开始翻译');
+        scheduleAutoFullPageTranslation();
       }
     } else {
       logger.info('未读到已保存的翻译模式，使用默认值', { mode: currentMode });
@@ -420,6 +420,45 @@ async function restoreMode(): Promise<void> {
     // 读取失败，使用默认模式
     logger.error('恢复翻译模式失败', error);
   }
+}
+
+/**
+ * 延迟启动自动全文翻译
+ *
+ * 内容脚本在 document_end 注入时，React 等 SSR 应用可能尚未完成水合（hydration）。
+ * 此时若直接改写 DOM（插入译文容器/改动文本节点），会触发页面的
+ * "Hydration failed"（React 错误 #418），导致整棵树被客户端重新渲染、译文丢失。
+ * 因此等待页面 load 事件（水合通常已完成）后再启动，并设置兜底超时，
+ * 避免部分站点 load 事件过慢导致功能迟迟不生效。
+ */
+function scheduleAutoFullPageTranslation(): void {
+  let started = false;
+
+  const start = (): void => {
+    if (started) return;
+    started = true;
+
+    // 无论由 load 事件还是兜底超时触发，都移除 load 监听器，避免其残留
+    window.removeEventListener('load', start);
+
+    // 让出主线程，给页面脚本（水合）让路后再启动翻译
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(() => startFullPageTranslation(), { timeout: 1500 });
+    } else {
+      setTimeout(() => startFullPageTranslation(), 200);
+    }
+  };
+
+  if (document.readyState === 'complete') {
+    start();
+    return;
+  }
+
+  // 主路径：等待 load 事件
+  window.addEventListener('load', start, { once: true });
+
+  // 兜底：load 事件过慢或被阻塞时，最迟 3.5 秒后启动
+  setTimeout(start, 3500);
 }
 
 /**
