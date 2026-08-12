@@ -101,8 +101,28 @@ let translatedNodes = new WeakSet<Node>();
 /** 全文翻译是否正在进行中 */
 let isFullPageTranslating = false;
 
-/** 待翻译的文本节点队列 */
-let pendingTextNodes: { node: Text; text: string }[] = [];
+/**
+ * 翻译单元：将 DOM 中相邻的短文本节点合并为一个翻译单元，
+ * 避免将逗号分隔的人名列表等拆散成多条独立翻译。
+ */
+interface TranslationUnit {
+  /** 该单元包含的文本节点列表 */
+  nodes: Text[];
+  /** 合并后的完整文本（空格分隔，发送给 LLM） */
+  combinedText: string;
+  /** 文本节点的公共父元素（取第一个节点的父元素） */
+  parentElement: HTMLElement;
+  /** 父元素的 display 类型 */
+  display: 'inline' | 'block';
+  /** 合并后的总字符数（含分隔空格） */
+  charCount: number;
+}
+
+/** 短文本阈值（字符数）：低于此值的文本节点优先与相邻节点合并 */
+const SHORT_TEXT_THRESHOLD = 30;
+
+/** 待翻译的翻译单元队列 */
+let pendingTextNodes: TranslationUnit[] = [];
 
 /** 全文翻译的防抖定时器 */
 let fullPageDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -805,66 +825,49 @@ function startFullPageTranslation(): void {
   }
   isFullPageTranslating = true;
 
-  // 收集所有需要翻译的文本节点
+  // 收集所有需要翻译的文本节点，合并为翻译单元
   const textNodes = collectTranslatableTextNodes(document.body);
   pendingTextNodes = textNodes;
 
-  logger.info('开始全文翻译', { nodeCount: textNodes.length });
+  logger.info('开始全文翻译', { unitCount: textNodes.length });
 
   // 分批处理翻译
   processNextBatch();
 }
 
 /**
- * 遍历 DOM 树，收集所有需要翻译的文本节点
+ * 遍历 DOM 树，收集所有需要翻译的文本节点并合并为翻译单元。
  *
- * 算法：
- * 1. 使用 TreeWalker 遍历所有文本节点
- * 2. 跳过 script/style/textarea 等标签
- * 3. 跳过已翻译的节点
- * 4. 跳过空白/过短的文本
- * 5. 跳过包含特定 CSS 类名的节点
+ * 合并规则：
+ * - 同一父元素下的相邻短文本节点会合并为一个翻译单元
+ * - 父元素是连续兄弟（如 &lt;a&gt;Alice&lt;/a&gt;, &lt;a&gt;Bob&lt;/a&gt;）也会合并
+ * - 长文本节点（如段落正文）独立成一个单元
+ * - 从 inline 切到 block 父元素时强制切分单元
  *
  * @param root 遍历的根节点
- * @returns 需要翻译的文本节点列表
+ * @returns 翻译单元列表
  */
-function collectTranslatableTextNodes(
-  root: Node
-): { node: Text; text: string }[] {
-  const result: { node: Text; text: string }[] = [];
+function collectTranslatableTextNodes(root: Node): TranslationUnit[] {
+  // ====== 阶段 1：收集所有符合条件的文本节点（与旧版相同） ======
+  const acceptedEntries: { node: Text; text: string }[] = [];
 
-  // 使用 TreeWalker 遍历文本节点
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node: Node): number {
       const textNode = node as Text;
       const text = textNode.textContent?.trim();
 
-      // 跳过空文本
-      if (!text || text.length < MIN_TEXT_LENGTH) {
-        return NodeFilter.FILTER_REJECT;
-      }
+      if (!text || text.length < MIN_TEXT_LENGTH) return NodeFilter.FILTER_REJECT;
+      if (translatedNodes.has(textNode)) return NodeFilter.FILTER_REJECT;
 
-      // 跳过已翻译的节点
-      if (translatedNodes.has(textNode)) {
-        return NodeFilter.FILTER_REJECT;
-      }
-
-      // 跳过不应翻译的标签内的文本
       const parent = textNode.parentElement;
       if (parent) {
-        if (SKIP_TAGS.has(parent.tagName)) {
-          return NodeFilter.FILTER_REJECT;
-        }
+        if (SKIP_TAGS.has(parent.tagName)) return NodeFilter.FILTER_REJECT;
 
-        // 检查 CSS 类名
         const className = parent.className?.toString?.() || '';
         for (const pattern of SKIP_CLASS_PATTERNS) {
-          if (className.includes(pattern)) {
-            return NodeFilter.FILTER_REJECT;
-          }
+          if (className.includes(pattern)) return NodeFilter.FILTER_REJECT;
         }
 
-        // 跳过扩展自身的元素
         if (
           parent.closest?.('#trans-ext-toggle-btn') ||
           parent.closest?.('#trans-ext-bubble') ||
@@ -874,24 +877,115 @@ function collectTranslatableTextNodes(
         }
       }
 
-      // 检查文本是否包含可翻译内容（至少包含一些字母）
-      if (!/[a-zA-Z]/.test(text)) {
-        return NodeFilter.FILTER_REJECT;
-      }
+      if (!/[a-zA-Z]/.test(text)) return NodeFilter.FILTER_REJECT;
 
       return NodeFilter.FILTER_ACCEPT;
     },
   });
 
-  // 收集所有符合条件的文本节点
   let node: Node | null;
   while ((node = walker.nextNode())) {
     const textNode = node as Text;
     const text = textNode.textContent?.trim() || '';
-    result.push({ node: textNode, text });
+    acceptedEntries.push({ node: textNode, text });
   }
 
-  return result;
+  if (acceptedEntries.length === 0) return [];
+
+  // ====== 阶段 2：将相邻短文本节点合并为翻译单元 ======
+  const units: TranslationUnit[] = [];
+
+  // 创建初始单元
+  const firstEntry = acceptedEntries[0]!;
+  let currentUnit = buildUnit(firstEntry.node, firstEntry.text);
+
+  for (let i = 1; i < acceptedEntries.length; i++) {
+    const entry = acceptedEntries[i]!;
+    const nodeParent = entry.node.parentElement;
+
+    if (canMergeIntoUnit(currentUnit, entry.node, nodeParent, entry.text)) {
+      // 合并到当前单元
+      currentUnit.nodes.push(entry.node);
+      currentUnit.combinedText += ' ' + entry.text;
+      currentUnit.charCount += entry.text.length + 1;
+    } else {
+      // 无法合并，结束当前单元，开始新单元
+      units.push(currentUnit);
+      currentUnit = buildUnit(entry.node, entry.text);
+    }
+  }
+
+  // 推入最后一个单元
+  units.push(currentUnit);
+
+  logger.info('收集翻译单元完成', {
+    rawNodeCount: acceptedEntries.length,
+    unitCount: units.length,
+  });
+
+  return units;
+}
+
+/**
+ * 构建一个初始翻译单元（只含一个文本节点）
+ */
+function buildUnit(node: Text, text: string): TranslationUnit {
+  const parent = node.parentElement!;
+  return {
+    nodes: [node],
+    combinedText: text,
+    parentElement: parent,
+    display: getDisplayType(parent),
+    charCount: text.length,
+  };
+}
+
+/**
+ * 判断是否可以将新文本节点合并到当前翻译单元
+ */
+function canMergeIntoUnit(
+  unit: TranslationUnit,
+  newNode: Text,
+  newParent: HTMLElement | null,
+  newText: string,
+): boolean {
+  // 超出最大单元长度 → 不合并
+  if (unit.charCount + newText.length > MAX_CHUNK_LENGTH) return false;
+  // 新节点无父元素 → 不合并
+  if (!newParent) return false;
+
+  // 条件 1：同一父元素 → 直接合并
+  if (newParent === unit.parentElement) return true;
+
+  // 条件 2：新节点的父元素与当前单元最后一个节点的父元素是兄弟 → 合并
+  const lastNode = unit.nodes[unit.nodes.length - 1]!;
+  const lastParent = lastNode.parentElement;
+  if (!lastParent) return false;
+
+  // 兄弟关系：共用祖父，且新父紧跟最后一个父
+  if (lastParent.parentElement === newParent.parentElement) {
+    // 从 display: block 切换到 display: inline 兄弟时也合并
+    for (
+      let sib: Node | null = lastParent.nextSibling;
+      sib;
+      sib = sib.nextSibling
+    ) {
+      if (sib === newParent) return true;
+      // 遇到块级元素就中断（说明跨度太大）
+      if (sib instanceof HTMLElement && getDisplayType(sib) === 'block') return false;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * 获取元素的 display 类型
+ */
+function getDisplayType(el: HTMLElement): 'inline' | 'block' {
+  const display = getComputedStyle(el).display;
+  // inline, inline-block, inline-flex 等都视为 inline
+  return display.startsWith('inline') ? 'inline' : 'block';
 }
 
 /**
@@ -921,7 +1015,7 @@ async function processNextBatch(): Promise<void> {
 
   // 并行处理当前批次
   await Promise.allSettled(
-    batch.map(({ node, text }) => translateAndInsert(node, text))
+    batch.map((unit) => translateAndInsert(unit))
   );
 
   // 继续处理下一批
@@ -929,24 +1023,24 @@ async function processNextBatch(): Promise<void> {
 }
 
 /**
- * 翻译单个文本节点并插入译文
+ * 翻译一个翻译单元并插入译文
  *
  * 使用 Shadow DOM 隔离译文样式，防止被网页 CSS 污染。
- * 译文插入在原文本节点下方的兄弟元素中。
+ * 译文以单元中最后一个文本节点为锚点，插入为其兄弟元素。
  *
- * @param textNode 原始文本节点
- * @param text 要翻译的文本
+ * @param unit 翻译单元
  */
-async function translateAndInsert(
-  textNode: Text,
-  text: string
-): Promise<void> {
-  // 标记为已处理，避免重复翻译
-  translatedNodes.add(textNode);
+async function translateAndInsert(unit: TranslationUnit): Promise<void> {
+  // 标记单元内所有节点为已处理，避免重复翻译
+  for (const node of unit.nodes) {
+    translatedNodes.add(node);
+  }
 
-  // 检查节点是否仍在 DOM 中
-  if (!textNode.parentNode) return;
+  // 以最后一个节点为 DOM 锚点（用于确定插入位置）
+  const anchorNode = unit.nodes[unit.nodes.length - 1]!;
+  if (!anchorNode.parentNode) return;
 
+  const text = unit.combinedText;
   const requestId = generateRequestId();
 
   try {
@@ -957,8 +1051,8 @@ async function translateAndInsert(
 
     const port = ensurePort();
 
-    // 读取父元素计算颜色，传入 Shadow DOM 使译文与页面颜色一致
-    const parentElement = textNode.parentElement;
+    // 读取单元父元素计算颜色，传入 Shadow DOM 使译文与页面颜色一致
+    const parentElement = unit.parentElement;
     const parentStyle = parentElement ? getComputedStyle(parentElement) : null;
     const parentColor = parentStyle?.color;
     const parentBgColor = parentStyle?.backgroundColor;
@@ -973,10 +1067,10 @@ async function translateAndInsert(
     const translationShadow = translationContainer.shadowRoot!;
     const contentEl = translationShadow.querySelector('.trans-content')!;
 
-    // 插入译文容器到原文本节点的父节点中
-    const parent = textNode.parentNode!;
-    if (textNode.nextSibling) {
-      parent.insertBefore(translationContainer, textNode.nextSibling);
+    // 插入译文容器到锚点节点之后
+    const parent = anchorNode.parentNode!;
+    if (anchorNode.nextSibling) {
+      parent.insertBefore(translationContainer, anchorNode.nextSibling);
     } else {
       parent.appendChild(translationContainer);
     }

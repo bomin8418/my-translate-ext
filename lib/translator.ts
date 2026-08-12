@@ -17,10 +17,11 @@ function buildSystemPrompt(targetLang: string): string {
   return `You are a professional translator. Translate the following text to ${targetLang}.
 Rules:
 1. Only output the translated text, nothing else.
-2. Preserve the original formatting, line breaks, and punctuation style.
-3. If the text is already in ${targetLang}, output it unchanged.
-4. For code snippets, technical terms, or proper nouns, keep them as-is.
-5. Do NOT add any explanations, notes, or prefixes like "Translation:"`;
+2. Preserve the original sentence structure. Do NOT split a sentence at punctuation marks (colon, comma, semicolon, period) and do NOT insert line breaks inside a sentence. If the input is a single line, the output must be exactly one line.
+3. Preserve the original formatting, line breaks, and punctuation style.
+4. If the text is already in ${targetLang}, output it unchanged.
+5. For code snippets, technical terms, or proper nouns, keep them as-is.
+6. Do NOT add any explanations, notes, or prefixes like "Translation:"`;
 }
 
 /**

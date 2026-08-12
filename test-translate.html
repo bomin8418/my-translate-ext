@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>翻译扩展 - 合并逻辑测试</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; line-height: 1.8; }
+    h1 { font-size: 24px; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; }
+    h2 { font-size: 18px; margin-top: 32px; }
+    .author-list a { color: #3b82f6; text-decoration: none; margin-right: 2px; }
+    .author-list a:hover { text-decoration: underline; }
+    .tag { display: inline-block; background: #f3f4f6; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin: 0 2px; }
+    pre { background: #f9fafb; padding: 12px; border-radius: 6px; overflow-x: auto; }
+    .dark { background: #1e1e1e; color: #e0e0e0; padding: 16px; border-radius: 8px; margin-top: 16px; }
+    .dark a { color: #60a5fa; }
+  </style>
+</head>
+<body>
+
+  <h1>Test Page for Translation Unit Merge Logic</h1>
+
+  <!-- ====== 场景 1：同一父元素下的多个单词（应合并为一个单元） ====== -->
+  <h2>Scenario 1: Same parent, comma-separated words</h2>
+  <p class="author-list">
+    <a href="#">Alice</a>, <a href="#">Bob</a>, <a href="#">Carol</a>, <a href="#">David</a>, and <a href="#">Eve</a>
+  </p>
+
+  <h2>Scenario 1b: Same parent, pipe-separated tags</h2>
+  <p>
+    <span class="tag">JavaScript</span> | <span class="tag">TypeScript</span> | <span class="tag">React</span> | <span class="tag">Vue</span> | <span class="tag">Node.js</span>
+  </p>
+
+  <!-- ====== 场景 2：块级列表中的人名（每个应独立翻译） ====== -->
+  <h2>Scenario 2: Block-level list items (each should be independent)</h2>
+  <ul>
+    <li>Alice is the lead engineer on the project and she is responsible for the backend architecture and database design.</li>
+    <li>Bob handles the frontend development and ensures all UI components are accessible.</li>
+    <li>Carol manages the DevOps pipeline and continuous integration workflow.</li>
+  </ul>
+
+  <!-- ====== 场景 3：长段落（应独立为单个单元） ====== -->
+  <h2>Scenario 3: Long paragraph</h2>
+  <p>
+    The quick brown fox jumps over the lazy dog. This sentence is used to test translation quality and merge behavior. It should remain as a single independent translation unit because the text content exceeds the short text threshold. The translation result should appear below this paragraph rather than inline beside it, preserving the original page layout.
+  </p>
+
+  <!-- ====== 场景 4：短标题（inline 元素，应合并） ====== -->
+  <h2>Scenario 4: Short headings / nav items</h2>
+  <nav>
+    <a href="#">Home</a> &nbsp;|&nbsp;
+    <a href="#">About</a> &nbsp;|&nbsp;
+    <a href="#">Contact</a> &nbsp;|&nbsp;
+    <a href="#">Blog</a> &nbsp;|&nbsp;
+    <a href="#">FAQ</a>
+  </nav>
+
+  <!-- ====== 场景 5：暗色模式测试 ====== -->
+  <h2>Scenario 5: Dark background (should inherit dark text color)</h2>
+  <div class="dark">
+    <p><a href="#">Alice</a>, <a href="#">Bob</a>, and <a href="#">Charlie</a> contributed to this dark-themed component.</p>
+  </div>
+
+  <!-- ====== 控制台日志提示 ====== -->
+  <script>
+    console.log('[测试页面] 页面已加载，请在悬浮按钮上切换到 📖 全文双语模式');
+    console.log('[测试页面] 查看 Console 中 [翻译扩展] 开头的日志，定位 "收集翻译单元完成" 即可看到合并效果');
+    console.log('[测试页面] 预期：');
+    console.log('[测试页面]   场景1 人名 → rawNodeCount=5, unitCount=1（合并）');
+    console.log('[测试页面]   场景1b 标签 → rawNodeCount=5, unitCount=1（合并）');
+    console.log('[测试页面]   场景2 列表项 → 每行独立单元');
+    console.log('[测试页面]   场景3 长段落 → 单个单元');
+    console.log('[测试页面]   场景4 导航 → rawNodeCount=5, unitCount=1（合并）');
+    console.log('[测试页面]   场景5 暗色 → 同场景1 的合并逻辑');
+  </script>
+</body>
+</html>
