@@ -72,6 +72,12 @@ const MIN_TEXT_LENGTH = 2;
 /** 翻译文本的最大长度（字符数，超过则分段翻译） */
 const MAX_CHUNK_LENGTH = 500;
 
+/** 应强制使用块级译文的 HTML 标签（强调元素及标题，避免行内译文与后续正文混排） */
+const EMPHASIS_TAGS = new Set([
+  'STRONG', 'EM', 'B', 'I', 'U',
+  'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+]);
+
 /** 防抖延迟（毫秒） */
 const DEBOUNCE_DELAY = 300;
 
@@ -1119,9 +1125,14 @@ async function translateAndInsert(unit: TranslationUnit): Promise<void> {
   const requestId = generateRequestId();
 
   try {
+    // 锚点的直接父元素（用于判断是否为强调元素内的文本）
+    const anchorParent = anchorNode.parentElement;
+    const anchorTag = anchorParent?.tagName ?? '';
+
     // 短文本（< 60 字符）使用行内翻译，长文本使用块级翻译
+    // 但强调元素（strong/em/h1-h6 等）内的文本强制块级，避免译文与后续正文同行混杂
     const INLINE_THRESHOLD = 60;
-    const isInline = text.length < INLINE_THRESHOLD;
+    const isInline = text.length < INLINE_THRESHOLD && !EMPHASIS_TAGS.has(anchorTag);
 
     // 截断过长文本
     const truncatedText = text.length > MAX_CHUNK_LENGTH
@@ -1136,9 +1147,17 @@ async function translateAndInsert(unit: TranslationUnit): Promise<void> {
     const parentColor = parentStyle?.color;
     const parentBgColor = parentStyle?.backgroundColor;
 
+    // 读取锚点父元素的字体样式，传入行内译文 Shadow DOM 以继承粗体/斜体/下划线
+    const anchorStyle = anchorParent ? getComputedStyle(anchorParent) : null;
+
     // 根据文本长度选择容器类型：短文本用行内 <span>，长文本用块级 <div>
     const translationContainer = isInline
-      ? createInlineTranslationContainer(parentColor)
+      ? createInlineTranslationContainer({
+          color: parentColor,
+          fontWeight: anchorStyle?.fontWeight === '400' ? undefined : anchorStyle?.fontWeight,
+          fontStyle: anchorStyle?.fontStyle === 'normal' ? undefined : anchorStyle?.fontStyle,
+          textDecoration: anchorStyle?.textDecoration === 'none' ? undefined : anchorStyle?.textDecoration,
+        })
       : createTranslationContainer(
           parentColor,
           parentBgColor === 'rgba(0, 0, 0, 0)' || parentBgColor === 'transparent'
@@ -1150,9 +1169,26 @@ async function translateAndInsert(unit: TranslationUnit): Promise<void> {
       ? translationShadow.querySelector('.trans-inline-content')!
       : translationShadow.querySelector('.trans-content')!;
 
-    // 插入译文容器到锚点节点之后（行内 span 与块级 div 的插入逻辑相同）
+    // 插入译文容器
+    // - 行内模式：容器插入到锚点文本节点之后（原有逻辑）
+    // - 块级模式且锚点位于 inline 元素内（如 <strong>）：将容器插入到该父元素之后，
+    //   避免 <div> 嵌在 <strong> 内部造成非法嵌套
     const parent = anchorNode.parentNode!;
-    if (anchorNode.nextSibling) {
+    if (!isInline && anchorParent && getDisplayType(anchorParent) === 'inline') {
+      // 块级模式 + inline 父元素 → 上移到父元素之后
+      const grandParent = anchorParent.parentNode;
+      if (grandParent) {
+        if (anchorParent.nextSibling) {
+          grandParent.insertBefore(translationContainer, anchorParent.nextSibling);
+        } else {
+          grandParent.appendChild(translationContainer);
+        }
+      } else if (anchorNode.nextSibling) {
+        parent.insertBefore(translationContainer, anchorNode.nextSibling);
+      } else {
+        parent.appendChild(translationContainer);
+      }
+    } else if (anchorNode.nextSibling) {
       parent.insertBefore(translationContainer, anchorNode.nextSibling);
     } else {
       parent.appendChild(translationContainer);
@@ -1296,6 +1332,14 @@ function getTranslationStyles(): string {
   `;
 }
 
+/** 行内译文容器字体样式选项 */
+interface InlineStyleOptions {
+  color?: string;
+  fontWeight?: string;
+  fontStyle?: string;
+  textDecoration?: string;
+}
+
 /**
  * 创建行内译文容器（用于短文本如标题、导航项、人名列表）
  *
@@ -1306,13 +1350,22 @@ function getTranslationStyles(): string {
  *     <span class="trans-inline-content"></span>
  * </span>
  */
-function createInlineTranslationContainer(parentColor?: string): HTMLElement {
+function createInlineTranslationContainer(options: InlineStyleOptions = {}): HTMLElement {
   const container = document.createElement('span');
   container.setAttribute('data-trans-ext', 'translation');
   container.classList.add('trans-ext-inline');
 
-  if (parentColor) {
-    container.style.setProperty('--trans-parent-color', parentColor);
+  if (options.color) {
+    container.style.setProperty('--trans-parent-color', options.color);
+  }
+  if (options.fontWeight) {
+    container.style.setProperty('--trans-parent-font-weight', options.fontWeight);
+  }
+  if (options.fontStyle) {
+    container.style.setProperty('--trans-parent-font-style', options.fontStyle);
+  }
+  if (options.textDecoration) {
+    container.style.setProperty('--trans-parent-text-decoration', options.textDecoration);
   }
 
   const shadow = container.attachShadow({ mode: 'open' });
@@ -1332,6 +1385,9 @@ function getInlineTranslationStyles(): string {
       color: var(--trans-parent-color, inherit);
       font-size: inherit;
       font-family: inherit;
+      font-weight: var(--trans-parent-font-weight, inherit);
+      font-style: var(--trans-parent-font-style, inherit);
+      text-decoration: var(--trans-parent-text-decoration, inherit);
       line-height: inherit;
       white-space: normal;
     }
