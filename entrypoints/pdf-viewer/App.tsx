@@ -2,7 +2,7 @@
  * PDF 查看器 - 使用 pdf.js 渲染 PDF 并支持双语翻译
  *
  * 功能：
- * 1. 从 URL 参数获取 PDF 文件地址
+ * 1. 通过 chrome.mimeHandler 接管 PDF（Chrome 151+，兼容 URL 参数降级路径）
  * 2. 使用 pdf.js 渲染 PDF 页面到 Canvas
  * 3. 提取 PDF 文本内容
  * 4. 支持双语翻译显示（提取英文文本 → 翻译为中文）
@@ -37,6 +37,13 @@ try {
   logger.warn('Worker 路径设置失败，将使用默认设置', err);
 }
 
+/** pdf.js 加载 PDF 的公共配置 */
+const PDF_COMMON_OPTIONS = {
+  // 仅部分特殊编码字体需要 cmap，普通英文 PDF 不会触发下载
+  cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/cmaps/',
+  cMapPacked: true,
+};
+
 // ==================== 类型定义 ====================
 
 /** PDF 文本项（从 pdf.js 提取） */
@@ -53,6 +60,40 @@ interface TranslationResult {
   loading: boolean;
   error?: string;
 }
+
+/**
+ * 将文本项按段落分组
+ * 根据垂直位置间距判断段落边界（纯函数，不依赖组件状态）
+ */
+const groupIntoParagraphs = (items: PdfTextItem[]): PdfTextItem[][] => {
+  if (items.length === 0) return [];
+
+  const paragraphs: PdfTextItem[][] = [];
+  // noUncheckedIndexedAccess 下索引访问类型为 PdfTextItem | undefined；
+  // 此处已校验 length > 0，items[0] 必然存在，使用非空断言
+  let currentParagraph: PdfTextItem[] = [items[0]!];
+
+  for (let i = 1; i < items.length; i++) {
+    // 循环边界保证 i 与 i-1 均在数组范围内，使用非空断言
+    const prev = items[i - 1]!;
+    const curr = items[i]!;
+    const gap = Math.abs(curr.y - prev.y);
+
+    // 如果垂直间距过大（超过 20 个单位），视为新段落
+    if (gap > 20) {
+      paragraphs.push(currentParagraph);
+      currentParagraph = [curr];
+    } else {
+      currentParagraph.push(curr);
+    }
+  }
+
+  if (currentParagraph.length > 0) {
+    paragraphs.push(currentParagraph);
+  }
+
+  return paragraphs;
+};
 
 // ==================== 组件 ====================
 
@@ -86,25 +127,14 @@ const PdfViewer: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Port 连接引用
   const portRef = useRef<chrome.runtime.Port | null>(null);
-
-  // ==================== 初始化 ====================
-
-  useEffect(() => {
-    // 从 URL 参数中获取 PDF 文件地址
-    const params = new URLSearchParams(window.location.search);
-    const url = params.get('url');
-
-    if (!url) {
-      logger.warn('未找到 PDF 文件 URL 参数');
-      setError('未找到 PDF 文件 URL，请在 URL 参数中提供 ?url=<pdf-url>');
-      setIsLoading(false);
-      return;
-    }
-
-    logger.info('检测到 PDF URL，开始加载', { url });
-    setPdfUrl(url);
-    loadPdf(url);
-  }, []);
+  // 翻译请求代号：每次翻页/关闭翻译时自增，用于丢弃过期的异步翻译结果
+  const translationGenRef = useRef(0);
+  // 当前 PDF 的加载来源（MIME 流或 URL 参数），失败重试时按来源重新加载
+  const sourceRef = useRef<
+    | { kind: 'stream'; streamUrl: string; displayUrl: string }
+    | { kind: 'url'; url: string }
+    | null
+  >(null);
 
   // ==================== PDF 加载 ====================
 
@@ -117,28 +147,168 @@ const PdfViewer: React.FC = () => {
     setError(null);
 
     try {
-      // 加载 PDF 文档
-      const loadingTask = pdfjsLib.getDocument({
-        url,
-        // 允许跨域加载
-        cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/cmaps/',
-        cMapPacked: true,
-      });
+      // 本地文件（file://）先用 fetch 读取字节，再交给 pdf.js，
+      // 避免 pdf.js 内部 fetch 流对 file 协议的限制，同时获得更明确的错误信息
+      let loadingTask: ReturnType<typeof pdfjsLib.getDocument>;
+      if (url.startsWith('file:')) {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`读取本地文件失败（HTTP ${response.status}）`);
+        }
+        const data = await response.arrayBuffer();
+        loadingTask = pdfjsLib.getDocument({ ...PDF_COMMON_OPTIONS, data });
+      } else {
+        // 在线 PDF 直接交给 pdf.js 加载（扩展具有 <all_urls> 主机权限，可跨域读取）
+        loadingTask = pdfjsLib.getDocument({ ...PDF_COMMON_OPTIONS, url });
+      }
 
       const doc = await loadingTask.promise;
-          setPdfDoc(doc);
-          setTotalPages(doc.numPages);
-          setCurrentPage(1);
+      setPdfDoc(doc);
+      setTotalPages(doc.numPages);
+      setCurrentPage(1);
+      // 加载成功后自动开启翻译，避免用户找不到翻译入口
+      setTranslationEnabled(true);
+      logger.info('PDF 加载成功', { pages: doc.numPages, url });
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'PDF 加载失败';
+      logger.error('PDF 加载失败', { url, error: errorMsg });
 
-          logger.info('PDF 加载成功', { pages: doc.numPages, url });
-        } catch (err) {
-          const errorMsg = err instanceof Error ? err.message : 'PDF 加载失败';
-          logger.error('PDF 加载失败', { url, error: errorMsg });
+      // 本地文件读取失败时，优先排查扩展的“允许访问文件网址”权限
+      if (url.startsWith('file:')) {
+        const applyFileError = (allowed: boolean) => {
+          if (allowed) {
+            setError(`PDF 加载失败: ${errorMsg}`);
+          } else {
+            setError(
+              '无法读取本地 PDF 文件：扩展尚未获得访问本地文件的权限。' +
+                '请在扩展详情页（chrome://extensions）开启「允许访问文件网址」，然后点击下方“重试”。'
+            );
+          }
+        };
+        if (typeof chrome.extension?.isAllowedFileSchemeAccess === 'function') {
+          chrome.extension.isAllowedFileSchemeAccess(applyFileError);
+        } else {
           setError(`PDF 加载失败: ${errorMsg}`);
-        } finally {
-          setIsLoading(false);
         }
+      } else {
+        setError(`PDF 加载失败: ${errorMsg}`);
+      }
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
+
+  /**
+   * 通过 MIME 处理程序的 streamUrl 加载 PDF（Chrome 151+）
+   */
+  const loadPdfFromStream = useCallback(
+    async (streamUrl: string, displayUrl: string) => {
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const response = await fetch(streamUrl);
+        if (!response.ok) {
+          throw new Error(`读取 PDF 流失败（HTTP ${response.status}）`);
+        }
+        const data = await response.arrayBuffer();
+        const doc = await pdfjsLib
+          .getDocument({ ...PDF_COMMON_OPTIONS, data })
+          .promise;
+        setPdfDoc(doc);
+        setTotalPages(doc.numPages);
+        setCurrentPage(1);
+        // 加载成功后自动开启翻译
+        setTranslationEnabled(true);
+        logger.info('PDF 通过 MIME 流加载成功', {
+          pages: doc.numPages,
+          displayUrl,
+        });
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : 'PDF 加载失败';
+        logger.error('PDF 流加载失败', {
+          displayUrl,
+          streamUrl,
+          error: errorMsg,
+        });
+        setError(`PDF 加载失败: ${errorMsg}`);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    []
+  );
+
+  /**
+   * 失败后重新加载当前 PDF（根据加载来源选择对应方式）
+   */
+  const retryLoad = useCallback(() => {
+    const src = sourceRef.current;
+    if (!src) return;
+    if (src.kind === 'stream') {
+      loadPdfFromStream(src.streamUrl, src.displayUrl);
+    } else {
+      loadPdf(src.url);
+    }
+  }, [loadPdf, loadPdfFromStream]);
+
+  // ==================== 初始化 ====================
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const init = async () => {
+      // 1) MIME 处理程序模式（Chrome 151+）：
+      //    浏览器打开 PDF 时直接把本查看器页作为处理程序，通过 getStreamInfo()
+      //    获取流信息。本地 file:// 文件在此模式下无需开启「允许访问文件网址」。
+      const hasMimeHandler =
+        typeof chrome.mimeHandler !== 'undefined' &&
+        typeof chrome.mimeHandler?.getStreamInfo === 'function';
+
+      if (hasMimeHandler) {
+        try {
+          const info = await chrome.mimeHandler.getStreamInfo();
+          if (cancelled) return;
+          logger.info('已通过 MIME 处理程序接管 PDF', {
+            originalUrl: info.originalUrl,
+            embedded: info.embedded,
+          });
+          sourceRef.current = {
+            kind: 'stream',
+            streamUrl: info.streamUrl,
+            displayUrl: info.originalUrl,
+          };
+          setPdfUrl(info.originalUrl);
+          await loadPdfFromStream(info.streamUrl, info.originalUrl);
+          return;
+        } catch (err) {
+          logger.warn('获取 MIME 流信息失败，回退到 URL 参数模式', { error: err });
+        }
+      }
+
+      // 2) URL 参数模式（旧版 Chrome 的 webNavigation 拦截降级路径）
+      const params = new URLSearchParams(window.location.search);
+      const url = params.get('url');
+
+      if (!url) {
+        logger.warn('未找到 PDF 文件 URL 参数');
+        setError('未找到 PDF 文件 URL，请在 URL 参数中提供 ?url=<pdf-url>');
+        setIsLoading(false);
+        return;
+      }
+
+      logger.info('检测到 PDF URL，开始加载', { url });
+      sourceRef.current = { kind: 'url', url };
+      setPdfUrl(url);
+      await loadPdf(url);
+    };
+
+    init();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadPdf, loadPdfFromStream]);
 
   // ==================== 页面渲染 ====================
 
@@ -184,48 +354,10 @@ const PdfViewer: React.FC = () => {
   // ==================== 文本提取和翻译 ====================
 
   /**
-   * 开启/关闭翻译
-   * 开启时提取当前页面的文本并翻译
-   */
-  const toggleTranslation = useCallback(async () => {
-    if (translationEnabled) {
-      // 关闭翻译
-      logger.info('关闭翻译', { page: currentPage });
-      setTranslationEnabled(false);
-      setTranslations(new Map());
-      setIsTranslating(false);
-      return;
-    }
-
-    logger.info('开启翻译', { page: currentPage });
-    setTranslationEnabled(true);
-    setIsTranslating(true);
-
-    if (!pdfDoc) {
-      logger.warn('PDF 文档未加载，无法开启翻译');
-      return;
-    }
-
-    try {
-      // 提取当前页面的文本
-      const items = await extractPageText(pdfDoc, currentPage);
-      setTextItems(items);
-      logger.info('文本提取完成', { page: currentPage, count: items.length });
-
-      // 翻译提取的文本
-      await translateTextItems(items);
-    } catch (err) {
-      logger.error('翻译失败', { page: currentPage, error: err });
-    } finally {
-      setIsTranslating(false);
-    }
-  }, [translationEnabled, pdfDoc, currentPage]);
-
-  /**
    * 提取 PDF 页面的文本内容
    * 使用 pdf.js 的 getTextContent API
    */
-  const extractPageText = async (
+  const extractPageText = useCallback(async (
     doc: PDFDocumentProxy,
     pageNum: number
   ): Promise<PdfTextItem[]> => {
@@ -260,13 +392,25 @@ const PdfViewer: React.FC = () => {
       validCount: result.length,
     });
     return result;
-  };
+  }, []);
 
   /**
    * 翻译文本项列表
    * 使用流式翻译，通过 Port 与 Background Worker 通信
    */
-  const translateTextItems = async (items: PdfTextItem[]): Promise<void> => {
+  const translateTextItems = useCallback(async (
+    items: PdfTextItem[],
+    gen: number
+  ): Promise<void> => {
+    // 若已有进行中的翻译连接，先断开（Background 会自动中止对应流式请求）
+    if (portRef.current) {
+      try {
+        portRef.current.disconnect();
+      } catch {
+        // 忽略已断开的连接
+      }
+    }
+
     // 建立 Port 连接
     const port = chrome.runtime.connect({ name: 'translate-stream' });
     portRef.current = port;
@@ -280,6 +424,21 @@ const PdfViewer: React.FC = () => {
     });
 
     for (let i = 0; i < paragraphs.length; i++) {
+      // 请求已过期（翻页或关闭翻译），停止后续段落
+      if (gen !== translationGenRef.current) {
+        logger.debug('翻译请求已过期，停止后续段落', {
+          index: i,
+          gen,
+          currentGen: translationGenRef.current,
+        });
+        try {
+          port.disconnect();
+        } catch {
+          // 忽略
+        }
+        return;
+      }
+
       const paragraph = paragraphs[i]!;
       const originalText = paragraph.map((item) => item.text).join(' ');
 
@@ -312,6 +471,13 @@ const PdfViewer: React.FC = () => {
         let fullTranslation = '';
 
         const listener = (message: ContentMessage) => {
+          // 请求已过期：移除监听并结束当前段落等待，避免旧结果写入界面
+          if (gen !== translationGenRef.current) {
+            port.onMessage.removeListener(listener);
+            resolve();
+            return;
+          }
+
           if (message.type === 'chunk' && message.requestId === requestId) {
             fullTranslation += message.content;
             // chunk 为高频消息，仅在 debug 级别输出
@@ -374,41 +540,74 @@ const PdfViewer: React.FC = () => {
       });
     }
     logger.info('所有段落翻译完成', { paragraphCount: paragraphs.length });
-  };
+  }, []);
 
   /**
-   * 将文本项按段落分组
-   * 根据垂直位置间距判断段落边界
+   * 翻译指定页面：提取文本并流式翻译
+   * 通过代号（generation）确保翻页/关闭后旧请求的结果不会写入界面
    */
-  const groupIntoParagraphs = (items: PdfTextItem[]): PdfTextItem[][] => {
-    if (items.length === 0) return [];
+  const translateCurrentPage = useCallback(
+    async (pageNum: number) => {
+      if (!pdfDoc) return;
 
-    const paragraphs: PdfTextItem[][] = [];
-    // noUncheckedIndexedAccess 下索引访问类型为 PdfTextItem | undefined；
-    // 此处已校验 length > 0，items[0] 必然存在，使用非空断言
-    let currentParagraph: PdfTextItem[] = [items[0]!];
+      const gen = ++translationGenRef.current;
+      setIsTranslating(true);
+      setTranslations(new Map());
 
-    for (let i = 1; i < items.length; i++) {
-      // 循环边界保证 i 与 i-1 均在数组范围内，使用非空断言
-      const prev = items[i - 1]!;
-      const curr = items[i]!;
-      const gap = Math.abs(curr.y - prev.y);
+      try {
+        // 提取当前页面的文本
+        const items = await extractPageText(pdfDoc, pageNum);
+        if (gen !== translationGenRef.current) return;
 
-      // 如果垂直间距过大（超过 20 个单位），视为新段落
-      if (gap > 20) {
-        paragraphs.push(currentParagraph);
-        currentParagraph = [curr];
-      } else {
-        currentParagraph.push(curr);
+        setTextItems(items);
+        logger.info('文本提取完成', { page: pageNum, count: items.length });
+
+        // 翻译提取的文本
+        await translateTextItems(items, gen);
+      } catch (err) {
+        if (gen !== translationGenRef.current) return;
+        logger.error('翻译失败', { page: pageNum, error: err });
+      } finally {
+        if (gen === translationGenRef.current) {
+          setIsTranslating(false);
+        }
       }
-    }
+    },
+    [pdfDoc, extractPageText, translateTextItems]
+  );
 
-    if (currentParagraph.length > 0) {
-      paragraphs.push(currentParagraph);
-    }
+  // ==================== 自动翻译 ====================
 
-    return paragraphs;
-  };
+  // 开启翻译时，渲染当前页并自动翻译；翻页时也会重新翻译新页面
+  useEffect(() => {
+    if (!pdfDoc || !translationEnabled) return;
+    translateCurrentPage(currentPage);
+  }, [pdfDoc, translationEnabled, currentPage, translateCurrentPage]);
+
+  /**
+   * 开启/关闭翻译
+   */
+  const toggleTranslation = useCallback(() => {
+    if (translationEnabled) {
+      // 关闭翻译：使进行中的请求失效并断开连接
+      logger.info('关闭翻译', { page: currentPage });
+      translationGenRef.current += 1;
+      setTranslationEnabled(false);
+      setTranslations(new Map());
+      setIsTranslating(false);
+      if (portRef.current) {
+        try {
+          portRef.current.disconnect();
+        } catch {
+          // 忽略已断开的连接
+        }
+        portRef.current = null;
+      }
+    } else {
+      logger.info('开启翻译', { page: currentPage });
+      setTranslationEnabled(true);
+    }
+  }, [translationEnabled, currentPage]);
 
   // ==================== 页面导航 ====================
 
@@ -459,12 +658,22 @@ const PdfViewer: React.FC = () => {
           <p className="text-sm text-gray-400 mb-4">
             原始 PDF 链接: <a href={pdfUrl} className="text-blue-500 underline" target="_blank">{pdfUrl}</a>
           </p>
-          <button
-            onClick={() => loadPdf(pdfUrl)}
-            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            重试
-          </button>
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={retryLoad}
+              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              重试
+            </button>
+            {error.includes('允许访问文件网址') && (
+              <button
+                onClick={() => chrome.tabs.create({ url: 'chrome://extensions/' })}
+                className="px-6 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+              >
+                打开扩展详情页
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );

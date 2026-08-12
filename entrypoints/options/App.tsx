@@ -437,6 +437,26 @@ const Options: React.FC = () => {
             </li>
           </ul>
         </div>
+
+        {/* PDF 翻译说明 */}
+        <div className="mt-6 bg-amber-50 rounded-2xl border border-amber-200 p-6">
+          <h2 className="text-lg font-semibold text-amber-800 mb-3">
+            📄 PDF 翻译说明
+          </h2>
+          <p className="text-sm text-amber-700 leading-relaxed">
+            本扩展已注册为 PDF 处理程序（Chrome 151+）。直接打开本地 PDF（
+            <code className="bg-amber-100 px-1 rounded">file://</code>
+            开头，例如双击打开的 PDF）或在线 PDF，会自动进入扩展内置查看器并自动翻译，无需开启「允许访问文件网址」。
+          </p>
+          <ul className="mt-2 space-y-1 text-sm text-amber-700 list-disc list-inside">
+            <li>首次打开 PDF 时若 Chrome 弹出选择方式，请选择「个人专属翻译助手」</li>
+            <li>若仍显示 Chrome 内置查看器，请重新加载扩展后再打开 PDF</li>
+            <li>Chrome 151 以下版本：需在 <code className="bg-amber-100 px-1 rounded">chrome://extensions</code> 开启「允许访问文件网址」</li>
+          </ul>
+          <p className="mt-3 text-xs text-amber-600">
+            打开 PDF 后若无反应，可右键查看器页面选择「检查」，在 Console 查看日志。
+          </p>
+        </div>
       </div>
     </div>
   );

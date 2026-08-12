@@ -22,6 +22,15 @@ export default defineConfig({
     // 主机权限：允许在所有网页上运行
     host_permissions: ['<all_urls>'],
 
+    // 注册为 PDF MIME 处理程序（Chrome 151+）：
+    // 用户打开 PDF（含本地 file:// 文件）时由浏览器直接交给本扩展的查看器页面，
+    // 无需开启「允许访问文件网址」即可读取本地文件。
+    mime_types_handler: {
+      'application/pdf': {
+        handler_url: 'pdf-viewer.html',
+      },
+    },
+
     // Web 可访问资源：PDF 查看器页面
     web_accessible_resources: [
       {
