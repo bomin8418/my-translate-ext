@@ -1218,8 +1218,6 @@ function getTranslationStyles(): string {
     .trans-container {
       display: block;
       margin-top: 4px;
-      padding-left: 6px;
-      border-left: 2px solid var(--trans-parent-color, #9ca3af);
       opacity: 0.85;
       font-family: inherit;
       font-size: inherit;
