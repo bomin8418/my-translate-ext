@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>翻译扩展 - 复杂标点测试</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; line-height: 1.8; }
+    h1  { font-size: 22px; border-bottom: 1px solid #d1d5db; padding-bottom: 6px; margin-top: 40px; }
+    h2  { font-size: 16px; color: #6b7280; margin-top: 28px; }
+    .label { display: inline-block; background: #e5e7eb; padding: 1px 6px; border-radius: 3px; font-size: 11px; margin-right: 6px; color: #6b7280; }
+    .sep  { color: #9ca3af; margin: 0 2px; }
+    hr   { margin: 36px 0; border: 0; border-top: 1px dashed #e5e7eb; }
+  </style>
+</head>
+<body>
+
+<h1>Complex Punctuation Tests</h1>
+
+<!-- ═══ 场景 1: 分号分隔 ═══ -->
+<h1>1. Semicolon-separated list</h1>
+<p>
+  <a href="#">Apple</a>; <a href="#">Banana</a>; <a href="#">Cherry</a>; <a href="#">Date</a>; <a href="#">Elderberry</a>
+</p>
+<div class="label">预期</div> 合并为 1 单元，LLM 收到: <code>Apple; Banana; Cherry; Date; Elderberry</code>
+
+<!-- ═══ 场景 2: 分号 + 空格 + 最终 and ═══ -->
+<h1>2. Semicolon with final "and"</h1>
+<p>
+  <span>Task A</span>; <span>Task B</span>; <span>Task C</span>; and <span>Task D</span>
+</p>
+<div class="label">预期</div> 合并为 1 单元，LLM 收到: <code>Task A; Task B; Task C; and Task D</code>
+
+<!-- ═══ 场景 3: 括号包裹 ═══ -->
+<h1>3. Parentheses (inline)</h1>
+<p>
+  The project (<a href="#">frontend</a>) and its counterpart (<a href="#">backend</a>) must be aligned.
+</p>
+<div class="label">预期</div> "project (frontend)" 在同一 `<p>` 下应合并，括号文本保留
+
+<!-- ═══ 场景 4: Em-dash 破折号 ═══ -->
+<h1>4. Em-dash separator</h1>
+<p>
+  <a href="#">Monday</a> &mdash; <a href="#">Wednesday</a> &mdash; <a href="#">Friday</a>
+</p>
+<div class="label">预期</div> 合并为 1 单元，LLM 收到: <code>Monday — Wednesday — Friday</code>
+
+<!-- ═══ 场景 5: 混合分隔符 ═══ -->
+<h1>5. Mixed separators (comma + and + colon)</h1>
+<p>
+  <a href="#">Login</a>, <a href="#">Register</a>, <a href="#">Settings</a>: <a href="#">Profile</a> and <a href="#">Security</a>
+</p>
+<div class="label">预期</div> 合并为 1 单元，LLM 收到: <code>Login, Register, Settings: Profile and Security</code>
+
+<!-- ═══ 场景 6: Unicode 符号 ═══ -->
+<h1>6. Unicode symbols (bullet / arrow)</h1>
+<p>
+  <a href="#">Design</a> &bull; <a href="#">Develop</a> &bull; <a href="#">Test</a> &rarr; <a href="#">Deploy</a>
+</p>
+<div class="label">预期</div> 合并为 1 单元，LLM 收到: <code>Design • Develop • Test → Deploy</code>
+
+<!-- ␃␃␃␃ 场景 7: 斜杠 ␃␃␃␃ -->
+<h1>7. Slash-separated options</h1>
+<p>
+  Choose your role: <a href="#">Admin</a> / <a href="#">Editor</a> / <a href="#">Viewer</a>
+</p>
+<div class="label">预期</div> 合并为 1 单元，LLM 收到: <code>Choose your role: Admin / Editor / Viewer</code>
+
+<!-- ═══ 场景 8: 竖线 ═══ -->
+<h1>8. Pipe-separated inline</h1>
+<p>
+  <span style="color:#2563eb">CPU</span> | <span style="color:#2563eb">Memory</span> | <span style="color:#2563eb">Disk</span> | <span style="color:#2563eb">Network</span>
+</p>
+<div class="label">预期</div> 合并为 1 单元，LLM 收到: <code>CPU | Memory | Disk | Network</code>
+
+<!-- ═══ 场景 9: 中英文混排 ═══ -->
+<h1>9. Mixed Chinese + English inline</h1>
+<p>
+  <span>启动</span> the <a href="#">server</a>, then <span>打开</span> the <a href="#">dashboard</a>.
+</p>
+<div class="label">预期</div> 中文文本被过滤（无字母），"server" 和 "dashboard" 被合并
+
+<!-- ═══ 场景 10: 复杂括号嵌套 ═══ -->
+<h1>10. Nested brackets</h1>
+<p>
+  Refer to Section <a href="#">3.2</a> (see <a href="#">Appendix A</a>) for details.
+</p>
+<div class="label">预期</div> "3.2" 和 "Appendix A" 合并为 1 单元，LLM 收到: <code>3.2 (see Appendix A)</code>
+
+<!-- ═══ 场景 11: 长列表（验证 MAX_CHUNK_LENGTH 截断） ═══ -->
+<h1>11. Long list (should NOT merge into one unit)</h1>
+<p>
+  <a href="#">Alpha</a>, <a href="#">Bravo</a>, <a href="#">Charlie</a>, <a href="#">Delta</a>,
+  <a href="#">Echo</a>, <a href="#">Foxtrot</a>, <a href="#">Golf</a>, <a href="#">Hotel</a>,
+  <a href="#">India</a>, <a href="#">Juliet</a>, <a href="#">Kilo</a>, <a href="#">Lima</a>,
+  <a href="#">Mike</a>, <a href="#">November</a>, <a href="#">Oscar</a>, <a href="#">Papa</a>,
+  <a href="#">Quebec</a>, <a href="#">Romeo</a>, <a href="#">Sierra</a>, <a href="#">Tango</a>,
+  <a href="#">Uniform</a>, <a href="#">Victor</a>, <a href="#">Whiskey</a>, <a href="#">X-ray</a>,
+  <a href="#">Yankee</a>, <a href="#">Zulu</a>
+</p>
+<div class="label">预期</div> 超出 MAX_CHUNK_LENGTH 时自动切分为多个单元
+
+<!-- ═══ 场景 12: 混合 display 类型（inline → block 应切分） ═══ -->
+<h1>12. Inline-to-block transition</h1>
+<p>
+  <a href="#">Quick</a> <em>summary:</em>
+</p>
+<div style="margin:8px 0; padding:8px; background:#f3f4f6; border-radius:4px;">
+  This block explains the architecture in detail and requires a separate translation unit.
+</div>
+<div class="label">预期</div> "Quick summary:" 合并为 1 行内单元；下方 block 独立为 1 块级单元
+
+<hr>
+
+<script>
+console.log('%c=== 复杂标点测试页 ===', 'font-size:16px;font-weight:bold;color:#10b981');
+console.log('12 个场景，覆盖：分号、括号、破折号、混合分隔符、Unicode、斜杠、竖线、中英混排、长列表截断、display 类型切换');
+console.log('切到 📖 全文双语模式后查看 Console 中 "收集翻译单元完成" 日志');
+</script>
+</body>
+</html>

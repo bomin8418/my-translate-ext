@@ -904,10 +904,12 @@ function collectTranslatableTextNodes(root: Node): TranslationUnit[] {
     const nodeParent = entry.node.parentElement;
 
     if (canMergeIntoUnit(currentUnit, entry.node, nodeParent, entry.text)) {
-      // 合并到当前单元
+      // 合并到当前单元：提取原 DOM 中两节点间的分隔符文本（逗号、空格等）
+      const lastNode = currentUnit.nodes[currentUnit.nodes.length - 1]!;
+      const sep = collectSeparator(lastNode, entry.node);
       currentUnit.nodes.push(entry.node);
-      currentUnit.combinedText += ' ' + entry.text;
-      currentUnit.charCount += entry.text.length + 1;
+      currentUnit.combinedText += sep + entry.text;
+      currentUnit.charCount += sep.length + entry.text.length;
     } else {
       // 无法合并，结束当前单元，开始新单元
       units.push(currentUnit);
@@ -989,6 +991,40 @@ function getDisplayType(el: HTMLElement): 'inline' | 'block' {
 }
 
 /**
+ * 提取 DOM 中两个文本节点之间的原始分隔文本（逗号、空格等）
+ *
+ * 使用 Range API 截取两节点间的字符串，保留原文的分隔符。
+ * 这样翻译时 LLM 看到的仍是 "Alice, Bob, Carol" 而非 "Alice Bob Carol"。
+ */
+function collectSeparator(lastNode: Text, nextNode: Text): string {
+  const lastEl = lastNode.parentElement;
+  const nextEl = nextNode.parentElement;
+
+  try {
+    if (lastEl === nextEl && lastEl) {
+      // 同一父元素：取两节点间的文本
+      const range = document.createRange();
+      range.setStartAfter(lastNode);
+      range.setEndBefore(nextNode);
+      return range.toString();
+    }
+
+    if (lastEl && nextEl && lastEl.parentElement === nextEl.parentElement) {
+      // 兄弟父元素：取 lastEl 之后到 nextEl 之前的文本
+      const grandParent = lastEl.parentElement!;
+      const range = document.createRange();
+      range.setStartAfter(lastEl);
+      range.setEndBefore(nextEl);
+      return range.toString();
+    }
+  } catch {
+    // Range 操作失败（节点已脱离 DOM 等），fallback 到空格
+  }
+
+  return ' ';
+}
+
+/**
  * 分批处理翻译队列
  * 每次处理一批文本节点，避免同时发起过多请求
  */
@@ -1044,6 +1080,10 @@ async function translateAndInsert(unit: TranslationUnit): Promise<void> {
   const requestId = generateRequestId();
 
   try {
+    // 短文本（< 60 字符）使用行内翻译，长文本使用块级翻译
+    const INLINE_THRESHOLD = 60;
+    const isInline = text.length < INLINE_THRESHOLD;
+
     // 截断过长文本
     const truncatedText = text.length > MAX_CHUNK_LENGTH
       ? text.slice(0, MAX_CHUNK_LENGTH) + '...'
@@ -1057,17 +1097,21 @@ async function translateAndInsert(unit: TranslationUnit): Promise<void> {
     const parentColor = parentStyle?.color;
     const parentBgColor = parentStyle?.backgroundColor;
 
-    // 创建译文容器（使用 Shadow DOM 隔离样式）
-    const translationContainer = createTranslationContainer(
-      parentColor,
-      parentBgColor === 'rgba(0, 0, 0, 0)' || parentBgColor === 'transparent'
-        ? undefined
-        : parentBgColor,
-    );
+    // 根据文本长度选择容器类型：短文本用行内 <span>，长文本用块级 <div>
+    const translationContainer = isInline
+      ? createInlineTranslationContainer(parentColor)
+      : createTranslationContainer(
+          parentColor,
+          parentBgColor === 'rgba(0, 0, 0, 0)' || parentBgColor === 'transparent'
+            ? undefined
+            : parentBgColor,
+        );
     const translationShadow = translationContainer.shadowRoot!;
-    const contentEl = translationShadow.querySelector('.trans-content')!;
+    const contentEl = isInline
+      ? translationShadow.querySelector('.trans-inline-content')!
+      : translationShadow.querySelector('.trans-content')!;
 
-    // 插入译文容器到锚点节点之后
+    // 插入译文容器到锚点节点之后（行内 span 与块级 div 的插入逻辑相同）
     const parent = anchorNode.parentNode!;
     if (anchorNode.nextSibling) {
       parent.insertBefore(translationContainer, anchorNode.nextSibling);
@@ -1085,16 +1129,18 @@ async function translateAndInsert(unit: TranslationUnit): Promise<void> {
         contentEl.textContent = fullTranslation;
       } else if (message.type === 'done' && message.requestId === requestId) {
         contentEl.textContent = message.fullText;
-        // 翻译完成后移除加载状态
-        const loadingEl = translationShadow.querySelector('.trans-loading');
-        loadingEl?.remove();
+        // 仅块级模式有加载动画需要移除
+        if (!isInline) {
+          const loadingEl = translationShadow.querySelector('.trans-loading');
+          loadingEl?.remove();
+        }
         port.onMessage.removeListener(messageHandler);
-        logger.debug('节点翻译完成', { requestId, length: message.fullText.length });
+        logger.debug('节点翻译完成', { requestId, length: message.fullText.length, isInline });
       } else if (message.type === 'error' && message.requestId === requestId) {
         contentEl.textContent = `⚠️ 翻译失败`;
         contentEl.classList.add('trans-error');
         port.onMessage.removeListener(messageHandler);
-        logger.error('节点翻译失败', { requestId });
+        logger.error('节点翻译失败', { requestId, isInline });
       }
     };
 
@@ -1162,19 +1208,18 @@ function createTranslationContainer(
   return container;
 }
 
-/** 译文容器的 Shadow DOM 样式 */
+/** 块级译文的 Shadow DOM 样式 */
 function getTranslationStyles(): string {
   return `
     .trans-container {
-      margin: 4px 0 8px 0;
-      padding: 4px 8px;
-      border-left: 3px solid #10b981;
-      border-radius: 0 4px 4px 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-size: 14px;
-      line-height: 1.6;
-      /* 背景和文字颜色通过宿主元素的 CSS 自定义属性传入，继承自原页面 */
-      background: var(--trans-parent-bg, transparent);
+      display: block;
+      margin-top: 4px;
+      padding-left: 6px;
+      border-left: 2px solid var(--trans-parent-color, #9ca3af);
+      opacity: 0.85;
+      font-family: inherit;
+      font-size: inherit;
+      line-height: inherit;
       color: var(--trans-parent-color, #374151);
     }
 
@@ -1206,6 +1251,60 @@ function getTranslationStyles(): string {
     @keyframes transPulse {
       0%, 100% { opacity: 0.3; }
       50% { opacity: 1; }
+    }
+  `;
+}
+
+/**
+ * 创建行内译文容器（用于短文本如标题、导航项、人名列表）
+ *
+ * 结构：
+ * <span data-trans-ext="translation" class="trans-ext-inline">
+ *   #shadow-root
+ *     <style>...</style>
+ *     <span class="trans-inline-content"></span>
+ * </span>
+ */
+function createInlineTranslationContainer(parentColor?: string): HTMLElement {
+  const container = document.createElement('span');
+  container.setAttribute('data-trans-ext', 'translation');
+  container.classList.add('trans-ext-inline');
+
+  if (parentColor) {
+    container.style.setProperty('--trans-parent-color', parentColor);
+  }
+
+  const shadow = container.attachShadow({ mode: 'open' });
+  shadow.innerHTML = `
+    <style>${getInlineTranslationStyles()}</style>
+    <span class="trans-inline-content"></span>
+  `;
+
+  return container;
+}
+
+/** 行内译文容器的 Shadow DOM 样式 */
+function getInlineTranslationStyles(): string {
+  return `
+    .trans-inline-content {
+      display: inline;
+      color: var(--trans-parent-color, inherit);
+      font-size: inherit;
+      font-family: inherit;
+      line-height: inherit;
+      white-space: normal;
+    }
+
+    .trans-inline-content::before {
+      content: '\\FF5C';  /* 全角竖线 ｜ 作为视觉分隔符 */
+      margin-right: 2px;
+      opacity: 0.4;
+      font-weight: normal;
+    }
+
+    .trans-inline-content.trans-error {
+      color: #ef4444;
+      font-size: 0.85em;
     }
   `;
 }

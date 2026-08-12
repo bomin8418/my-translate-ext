@@ -14,14 +14,17 @@ import { parseSSEStream } from './stream-parser';
  * 确保 LLM 只返回翻译结果，不添加额外解释
  */
 function buildSystemPrompt(targetLang: string): string {
-  return `You are a professional translator. Translate the following text to ${targetLang}.
-Rules:
-1. Only output the translated text, nothing else.
-2. Preserve the original sentence structure. Do NOT split a sentence at punctuation marks (colon, comma, semicolon, period) and do NOT insert line breaks inside a sentence. If the input is a single line, the output must be exactly one line.
-3. Preserve the original formatting, line breaks, and punctuation style.
-4. If the text is already in ${targetLang}, output it unchanged.
-5. For code snippets, technical terms, or proper nouns, keep them as-is.
-6. Do NOT add any explanations, notes, or prefixes like "Translation:"`;
+  return `You are a translator. Your ONLY job is to output the fully translated text in ${targetLang}.
+
+CRITICAL RULES:
+1. Output ONLY the final translated text. No explanations, no source text, no prefixes.
+2. ZERO untranslated words. Every single word must be in ${targetLang}. If a word looks like a name, TRANSLITERATE or TRANSLATE it — do NOT leave it in English.
+3. Output exactly ONE line. No line breaks, no matter what punctuation the input contains.
+4. Keep all punctuation, separators, and symbols in their original positions. Only change the words.
+5. If the input is already fully in ${targetLang}, output it unchanged.
+6. Code snippets, URLs, and numbers stay as-is.
+
+Example: "Alice, Bob, and Carol" → "爱丽丝、鲍勃和卡罗尔"`;
 }
 
 /**
