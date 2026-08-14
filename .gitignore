@@ -7,12 +7,21 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
 node_modules
 .output
 stats.html
 stats-*.json
 .wxt
 web-ext.config.ts
+
+# Test coverage and TypeScript incremental build info
+coverage/
+*.tsbuildinfo
 
 # Local AI agent workspaces
 .trae/
@@ -23,6 +32,8 @@ web-ext.config.ts
 !.vscode/extensions.json
 .idea
 .DS_Store
+Thumbs.db
+Desktop.ini
 *.suo
 *.ntvs*
 *.njsproj
