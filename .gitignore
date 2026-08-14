@@ -24,7 +24,6 @@ coverage/
 *.tsbuildinfo
 
 # Local AI agent workspaces
-.trae/
 .workbuddy/
 
 # Editor directories and files
