@@ -39,11 +39,6 @@ npm run compile      # TypeScript 类型检查
 
 构建完成后，在 Chrome 打开 `chrome://extensions`，开启「开发者模式」，点击「加载已解压的扩展程序」，选择 `.output/chrome-mv3` 目录。
 
-## 分支说明
-
-- `main`：发布分支。执行 `npm run build` 或 `npm run zip` 时，浏览器控制台日志默认静默。
-- `develop`：开发分支。执行 `npm run dev` 时保留完整的浏览器控制台日志，方便调试。
-
 ## 使用
 
 1. 点击工具栏图标打开设置页，填写 API Key / Base URL / 模型并保存。
