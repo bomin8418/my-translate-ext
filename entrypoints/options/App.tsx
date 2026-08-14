@@ -433,6 +433,11 @@ const Options: React.FC = () => {
             </li>
             <li className="flex gap-2">
               <span className="text-blue-500">5.</span>
+              <strong>仅译文模式：</strong>
+              自动翻译页面所有英文内容，只显示译文，不显示原文
+            </li>
+            <li className="flex gap-2">
+              <span className="text-blue-500">6.</span>
               PDF 文件会自动使用扩展内置查看器，支持全文翻译
             </li>
           </ul>

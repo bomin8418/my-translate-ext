@@ -6,7 +6,8 @@
  * 1. 悬浮按钮：右下角可拖拽的 Toggle 按钮，控制翻译模式
  * 2. 划词翻译：选中文本后弹出气泡，流式显示翻译结果
  * 3. 双语显示：遍历 DOM 文本节点，翻译后在下方插入译文（Shadow DOM 隔离）
- * 4. SPA 支持：MutationObserver 监听动态内容，自动翻译新节点
+ * 4. 仅译文显示：遍历 DOM 文本节点，翻译后直接替换原文内容
+ * 5. SPA 支持：MutationObserver 监听动态内容，自动翻译新节点
  *
  * 技术要点：
  * - 使用 chrome.runtime.connect 长连接实现流式翻译
@@ -132,6 +133,30 @@ let pendingTextNodes: TranslationUnit[] = [];
 
 /** 全文翻译的防抖定时器 */
 let fullPageDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 仅译文全文翻译的防抖定时器 */
+let translationOnlyDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 仅译文全文翻译是否正在进行中 */
+let isTranslationOnlyTranslating = false;
+
+/** 仅译文全文翻译的文本节点队列 */
+let pendingTranslationOnlyNodes: { node: Text; text: string }[] = [];
+
+/** 仅译文全文翻译的当前批次索引 */
+let translationOnlyBatchIndex = 0;
+
+/** 仅译文模式中被替换的原始文本，用于切回其它模式时恢复 */
+let originalTextContents = new Map<Text, string>();
+
+/** 仅译文翻译请求代号：切走或关闭时自增，用于丢弃过期响应 */
+let translationOnlyGeneration = 0;
+
+/** 内容脚本内的轻量提示条 */
+let toastElement: HTMLDivElement | null = null;
+
+/** 提示条自动关闭定时器 */
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ==================== 初始化 ====================
 
@@ -376,7 +401,7 @@ function setupDrag(container: HTMLElement, handle: Element): void {
 }
 
 /**
- * 循环切换翻译模式：OFF → SELECTION → FULL_PAGE → OFF
+ * 循环切换翻译模式：OFF → SELECTION → FULL_PAGE → TRANSLATION_ONLY → OFF
  */
 function cycleMode(): void {
   const prevMode = currentMode;
@@ -390,9 +415,15 @@ function cycleMode(): void {
       startFullPageTranslation();
       break;
     case TranslationMode.FULL_PAGE:
-      currentMode = TranslationMode.OFF;
-      // 关闭全文翻译，移除译文
+      currentMode = TranslationMode.TRANSLATION_ONLY;
+      // 关闭双语模式并进入仅译文全文翻译模式
       removeAllTranslations();
+      startTranslationOnlyTranslation();
+      break;
+    case TranslationMode.TRANSLATION_ONLY:
+      currentMode = TranslationMode.OFF;
+      // 关闭仅译文模式，恢复原始文本
+      stopTranslationOnlyTranslation();
       break;
   }
 
@@ -418,6 +449,9 @@ async function restoreMode(): Promise<void> {
       if (currentMode === TranslationMode.FULL_PAGE) {
         logger.info('之前为全文模式，等待页面加载完成后重新开始翻译');
         scheduleAutoFullPageTranslation();
+      } else if (currentMode === TranslationMode.TRANSLATION_ONLY) {
+        logger.info('之前为仅译文模式，等待页面加载完成后重新开始翻译');
+        scheduleAutoTranslationOnly();
       }
     } else {
       logger.info('未读到已保存的翻译模式，使用默认值', { mode: currentMode });
@@ -468,6 +502,36 @@ function scheduleAutoFullPageTranslation(): void {
 }
 
 /**
+ * 延迟启动自动仅译文翻译
+ *
+ * 与双语全文翻译相同，等待页面 load/水合完成后再改写文本节点，
+ * 避免 React 等 SSR 应用出现 Hydration failed。
+ */
+function scheduleAutoTranslationOnly(): void {
+  let started = false;
+
+  const start = (): void => {
+    if (started) return;
+    started = true;
+    window.removeEventListener('load', start);
+
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(() => startTranslationOnlyTranslation(), { timeout: 1500 });
+    } else {
+      setTimeout(() => startTranslationOnlyTranslation(), 200);
+    }
+  };
+
+  if (document.readyState === 'complete') {
+    start();
+    return;
+  }
+
+  window.addEventListener('load', start, { once: true });
+  setTimeout(start, 3500);
+}
+
+/**
  * 更新悬浮按钮的外观以反映当前模式
  */
 function updateToggleButtonAppearance(): void {
@@ -475,25 +539,39 @@ function updateToggleButtonAppearance(): void {
 
   const btn = toggleButton.shadowRoot.querySelector('.trans-toggle-btn');
   const indicator = toggleButton.shadowRoot.querySelector('.trans-mode-indicator');
-  if (!btn || !indicator) return;
+  const label = toggleButton.shadowRoot.querySelector('.trans-mode-label');
+  if (!btn || !indicator || !label) return;
 
   // 更新按钮样式
-  btn.classList.remove('mode-off', 'mode-selection', 'mode-fullpage');
+  btn.classList.remove('mode-off', 'mode-selection', 'mode-fullpage', 'mode-translation-only');
   switch (currentMode) {
     case TranslationMode.OFF:
       btn.classList.add('mode-off');
       (indicator as HTMLElement).innerHTML = '🌐';
+      (label as HTMLElement).textContent = '翻译';
       btn.setAttribute('aria-label', '翻译已关闭');
+      toggleButton.title = '翻译助手 - 点击切换模式';
       break;
     case TranslationMode.SELECTION:
       btn.classList.add('mode-selection');
       (indicator as HTMLElement).innerHTML = '🔤';
+      (label as HTMLElement).textContent = '划词';
       btn.setAttribute('aria-label', '划词翻译模式');
+      toggleButton.title = '当前：划词翻译，点击切换到全文双语';
       break;
     case TranslationMode.FULL_PAGE:
       btn.classList.add('mode-fullpage');
       (indicator as HTMLElement).innerHTML = '📖';
+      (label as HTMLElement).textContent = '双语';
       btn.setAttribute('aria-label', '全文双语模式');
+      toggleButton.title = '当前：全文双语，点击切换到仅译文';
+      break;
+    case TranslationMode.TRANSLATION_ONLY:
+      btn.classList.add('mode-translation-only');
+      (indicator as HTMLElement).innerHTML = '🔁';
+      (label as HTMLElement).textContent = '仅译';
+      btn.setAttribute('aria-label', '全文仅译文模式');
+      toggleButton.title = '当前：全文仅译文，点击关闭翻译';
       break;
   }
 }
@@ -503,6 +581,7 @@ function getToggleButtonHTML(): string {
   return `
     <div class="trans-toggle-btn mode-off" role="button" tabindex="0">
       <span class="trans-mode-indicator">🌐</span>
+      <span class="trans-mode-label">翻译</span>
     </div>
   `;
 }
@@ -514,12 +593,13 @@ function getToggleButtonStyles(): string {
       position: fixed;
       bottom: 20px;
       right: 20px;
-      width: 48px;
-      height: 48px;
-      border-radius: 50%;
+      height: 44px;
+      padding: 0 14px;
+      border-radius: 22px;
       display: flex;
       align-items: center;
       justify-content: center;
+      gap: 6px;
       cursor: pointer;
       box-shadow: 0 4px 12px rgba(0,0,0,0.15);
       transition: all 0.3s ease;
@@ -545,10 +625,22 @@ function getToggleButtonStyles(): string {
     .mode-fullpage {
       background: #10b981;
     }
+    .mode-translation-only {
+      background: #7c3aed;
+    }
 
     .trans-mode-indicator {
-      font-size: 22px;
+      font-size: 18px;
       line-height: 1;
+      pointer-events: none;
+    }
+
+    .trans-mode-label {
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1;
+      color: #ffffff;
+      white-space: nowrap;
       pointer-events: none;
     }
   `;
@@ -853,6 +945,83 @@ function getBubbleStyles(): string {
     @keyframes transPulseDot {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.3; }
+    }
+  `;
+}
+
+// ==================== 内容脚本提示条 ====================
+
+/**
+ * 显示一个自动消失的提示条，用于反馈仅译文模式的加载或错误状态。
+ */
+function showContentToast(
+  message: string,
+  type: 'info' | 'error' = 'error'
+): void {
+  hideContentToast();
+
+  toastElement = document.createElement('div');
+  toastElement.id = 'trans-ext-toast';
+  toastElement.setAttribute('data-trans-ext', 'toast');
+
+  const shadow = toastElement.attachShadow({ mode: 'open' });
+  shadow.innerHTML = `
+    <style>${getToastStyles()}</style>
+    <div class="trans-toast"></div>
+  `;
+
+  const toast = shadow.querySelector('.trans-toast')!;
+  toast.textContent = message;
+  toast.classList.add(type);
+
+  document.body.appendChild(toastElement);
+  toastTimer = setTimeout(hideContentToast, 4000);
+}
+
+/**
+ * 隐藏并清理提示条。
+ */
+function hideContentToast(): void {
+  if (toastTimer) {
+    clearTimeout(toastTimer);
+    toastTimer = null;
+  }
+  if (toastElement) {
+    toastElement.remove();
+    toastElement = null;
+  }
+}
+
+/** 提示条样式 */
+function getToastStyles(): string {
+  return `
+    :host {
+      position: fixed;
+      left: 50%;
+      bottom: 84px;
+      transform: translateX(-50%);
+      z-index: 2147483647;
+      pointer-events: none;
+    }
+
+    .trans-toast {
+      max-width: min(92vw, 420px);
+      padding: 10px 16px;
+      border-radius: 10px;
+      font: 500 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #ffffff;
+      background: rgba(17, 24, 39, 0.92);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+      text-align: center;
+      word-break: break-word;
+    }
+
+    .trans-toast.error {
+      background: rgba(190, 18, 60, 0.94);
+    }
+
+    .trans-toast.info {
+      background: rgba(37, 99, 235, 0.94);
     }
   `;
 }
@@ -1414,6 +1583,12 @@ function removeAllTranslations(): void {
   isFullPageTranslating = false;
   batchIndex = 0;
   pendingTextNodes = [];
+
+  if (fullPageDebounceTimer) {
+    clearTimeout(fullPageDebounceTimer);
+    fullPageDebounceTimer = null;
+  }
+
   // 替换为新 WeakSet，清空已翻译节点记录
   translatedNodes = new WeakSet<Node>();
 
@@ -1424,6 +1599,172 @@ function removeAllTranslations(): void {
   logger.info('已移除所有译文', { count: containers.length });
 }
 
+// ==================== 全文仅译文显示 ====================
+
+/**
+ * 开始仅译文全文翻译
+ *
+ * 与双语全文翻译使用同一套文本节点收集逻辑，但不插入译文容器；
+ * 翻译完成后直接用译文替换原文本节点内容，因此页面上只显示译文。
+ */
+function startTranslationOnlyTranslation(): void {
+  if (isTranslationOnlyTranslating) {
+    logger.debug('仅译文全文翻译已在进行中，跳过');
+    return;
+  }
+
+  // 进入新模式时先清掉其它模式留下的译文记录
+  stopTranslationOnlyTranslation();
+
+  isTranslationOnlyTranslating = true;
+  translationOnlyBatchIndex = 0;
+  translationOnlyGeneration += 1;
+
+  const units = collectTranslatableTextNodes(document.body);
+  pendingTranslationOnlyNodes = units.flatMap((unit) =>
+    unit.nodes.map((node) => ({
+      node,
+      text: node.textContent?.trim() || '',
+    }))
+  );
+
+  logger.info('开始仅译文全文翻译', { count: pendingTranslationOnlyNodes.length });
+  processTranslationOnlyNextBatch();
+}
+
+/**
+ * 分批处理仅译文翻译队列，避免同时发起过多请求。
+ */
+async function processTranslationOnlyNextBatch(): Promise<void> {
+  if (!isTranslationOnlyTranslating) return;
+
+  const gen = translationOnlyGeneration;
+  const batch = pendingTranslationOnlyNodes.slice(
+    translationOnlyBatchIndex,
+    translationOnlyBatchIndex + BATCH_SIZE
+  );
+  translationOnlyBatchIndex += BATCH_SIZE;
+
+  if (batch.length === 0) {
+    isTranslationOnlyTranslating = false;
+    translationOnlyBatchIndex = 0;
+    pendingTranslationOnlyNodes = [];
+    logger.info('仅译文全文翻译完成');
+    return;
+  }
+
+  await Promise.allSettled(
+    batch.map((task) => translateAndReplaceTextNode(task, gen))
+  );
+
+  processTranslationOnlyNextBatch();
+}
+
+/**
+ * 翻译单个文本节点，并用译文替换其内容。
+ *
+ * @param task 文本节点任务
+ * @param gen 当前翻译代号，用于丢弃过期响应
+ */
+async function translateAndReplaceTextNode(
+  task: { node: Text; text: string },
+  gen: number
+): Promise<void> {
+  const { node, text } = task;
+
+  // 避免节点在异步过程中被移除或翻译状态已过期
+  if (!node.isConnected || gen !== translationOnlyGeneration) return;
+
+  // 保存原始内容以便关闭模式时恢复
+  if (!originalTextContents.has(node)) {
+    originalTextContents.set(node, node.textContent ?? '');
+  }
+  translatedNodes.add(node);
+
+  // 立即显示占位符，让用户明确看到当前模式已开始工作
+  if (node.isConnected) {
+    node.textContent = '…';
+  }
+
+  const requestId = generateRequestId();
+  const truncatedText = text.length > MAX_CHUNK_LENGTH
+    ? text.slice(0, MAX_CHUNK_LENGTH) + '...'
+    : text;
+  const port = ensurePort();
+
+  try {
+    let fullTranslation = '';
+
+    const messageHandler = (message: ContentMessage): void => {
+      // 切换模式后旧请求的结果不应再写入页面
+      if (gen !== translationOnlyGeneration) {
+        port.onMessage.removeListener(messageHandler);
+        return;
+      }
+
+      if (message.type === 'chunk' && message.requestId === requestId) {
+        fullTranslation += message.content;
+        if (node.isConnected) {
+          node.textContent = fullTranslation;
+        }
+      } else if (message.type === 'done' && message.requestId === requestId) {
+        if (node.isConnected) {
+          node.textContent = message.fullText;
+        }
+        port.onMessage.removeListener(messageHandler);
+        logger.debug('仅译文节点翻译完成', { requestId, length: message.fullText.length });
+      } else if (message.type === 'error' && message.requestId === requestId) {
+        // 失败时恢复原文，避免页面内容丢失
+        if (node.isConnected) {
+          node.textContent = originalTextContents.get(node) ?? text;
+        }
+        showContentToast('仅译文翻译失败，请检查 API 配置或稍后重试', 'error');
+        port.onMessage.removeListener(messageHandler);
+        logger.error('仅译文节点翻译失败', { requestId });
+      }
+    };
+
+    port.onMessage.addListener(messageHandler);
+
+    port.postMessage({
+      type: 'translate-stream',
+      text: truncatedText,
+      targetLang: 'Chinese',
+      requestId,
+    });
+  } catch (err) {
+    logger.error('仅译文节点翻译异常', {
+      requestId,
+      textLength: text.length,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * 停止仅译文模式并恢复所有被替换的原始文本。
+ */
+function stopTranslationOnlyTranslation(): void {
+  translationOnlyGeneration += 1;
+  isTranslationOnlyTranslating = false;
+  translationOnlyBatchIndex = 0;
+  pendingTranslationOnlyNodes = [];
+  hideContentToast();
+
+  if (translationOnlyDebounceTimer) {
+    clearTimeout(translationOnlyDebounceTimer);
+    translationOnlyDebounceTimer = null;
+  }
+
+  for (const [node, originalText] of originalTextContents) {
+    if (node.isConnected) {
+      node.textContent = originalText;
+    }
+  }
+  originalTextContents.clear();
+  translatedNodes = new WeakSet<Node>();
+}
+
 // ==================== MutationObserver（SPA 支持） ====================
 
 /**
@@ -1432,10 +1773,6 @@ function removeAllTranslations(): void {
  */
 function setupMutationObserver(): void {
   const observer = new MutationObserver((mutations) => {
-    // 仅在全文模式下处理
-    if (currentMode !== TranslationMode.FULL_PAGE) return;
-    if (!isFullPageTranslating) return;
-
     // 收集所有新增的文本节点
     const newNodes: Node[] = [];
     for (const mutation of mutations) {
@@ -1454,24 +1791,55 @@ function setupMutationObserver(): void {
 
     if (newNodes.length === 0) return;
 
-    // 防抖：等待页面稳定后再翻译
-    if (fullPageDebounceTimer) {
-      clearTimeout(fullPageDebounceTimer);
+    if (currentMode === TranslationMode.FULL_PAGE) {
+      // 防抖：等待页面稳定后再翻译
+      if (fullPageDebounceTimer) {
+        clearTimeout(fullPageDebounceTimer);
+      }
+
+      fullPageDebounceTimer = setTimeout(() => {
+        // 防抖期间用户可能已切出全文双语模式
+        if (currentMode !== TranslationMode.FULL_PAGE) return;
+
+        // 从每个新增节点中收集可翻译的文本节点
+        for (const node of newNodes) {
+          const textNodes = collectTranslatableTextNodes(node);
+          pendingTextNodes.push(...textNodes);
+        }
+
+        // 如果当前没有在处理，开始处理
+        if (!isFullPageTranslating) {
+          isFullPageTranslating = true;
+          processNextBatch();
+        }
+      }, MUTATION_DEBOUNCE);
+    } else if (currentMode === TranslationMode.TRANSLATION_ONLY) {
+      if (translationOnlyDebounceTimer) {
+        clearTimeout(translationOnlyDebounceTimer);
+      }
+
+      translationOnlyDebounceTimer = setTimeout(() => {
+        // 防抖期间用户可能已切出仅译文模式
+        if (currentMode !== TranslationMode.TRANSLATION_ONLY) return;
+
+        for (const node of newNodes) {
+          const units = collectTranslatableTextNodes(node);
+          for (const unit of units) {
+            for (const textNode of unit.nodes) {
+              pendingTranslationOnlyNodes.push({
+                node: textNode,
+                text: textNode.textContent?.trim() || '',
+              });
+            }
+          }
+        }
+
+        if (!isTranslationOnlyTranslating) {
+          isTranslationOnlyTranslating = true;
+        }
+        processTranslationOnlyNextBatch();
+      }, MUTATION_DEBOUNCE);
     }
-
-    fullPageDebounceTimer = setTimeout(() => {
-      // 从每个新增节点中收集可翻译的文本节点
-      for (const node of newNodes) {
-        const textNodes = collectTranslatableTextNodes(node);
-        pendingTextNodes.push(...textNodes);
-      }
-
-      // 如果当前没有在处理，开始处理
-      if (!isFullPageTranslating) {
-        isFullPageTranslating = true;
-        processNextBatch();
-      }
-    }, MUTATION_DEBOUNCE);
   });
 
   // 开始观察 DOM 变化

@@ -98,6 +98,7 @@ export enum TranslationMode {
   OFF = 'off',                    // 关闭
   SELECTION = 'selection',        // 仅划词翻译
   FULL_PAGE = 'fullpage',         // 全文双语显示
+  TRANSLATION_ONLY = 'translation-only', // 全文翻译（仅显示译文）
 }
 
 // ==================== LLM API 相关 ====================
