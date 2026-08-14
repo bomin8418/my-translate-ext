@@ -2,7 +2,7 @@
   "name": "my-translate-ext",
   "description": "个人专属网页翻译浏览器扩展（英译中）- 基于 LLM API",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "scripts": {
     "dev": "wxt",

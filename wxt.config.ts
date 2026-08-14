@@ -9,7 +9,7 @@ export default defineConfig({
   manifest: {
     name: '个人专属翻译助手',
     description: '基于 LLM 的个人网页翻译扩展（英译中），支持划词翻译和全文双语显示',
-    version: '1.0.0',
+    version: '1.0.1',
 
     // 必需的权限
     permissions: [

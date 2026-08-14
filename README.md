@@ -4,11 +4,11 @@
 
 ## 下载与安装
 
-当前发布版本：[v1.0.0](https://github.com/bomin8418/my-translate-ext/releases/tag/v1.0.0)
+当前发布版本：[v1.0.1](https://github.com/bomin8418/my-translate-ext/releases/tag/v1.0.1)
 
 Chrome 用户可以直接下载已打包的扩展：
 
-[下载 my-translate-ext-1.0.0-chrome.zip](https://github.com/bomin8418/my-translate-ext/releases/download/v1.0.0/my-translate-ext-1.0.0-chrome.zip)
+[下载 my-translate-ext-1.0.1-chrome.zip](https://github.com/bomin8418/my-translate-ext/releases/download/v1.0.1/my-translate-ext-1.0.1-chrome.zip)
 
 安装步骤：
 
