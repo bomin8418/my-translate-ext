@@ -10,7 +10,8 @@
  *   logger.error('加载失败:', err);
  *
  * 级别控制：
- *   默认级别为 'info'。可在控制台或代码中通过 setLogLevel 动态调整，
+ *   开发模式默认级别为 'info'；生产/发布构建默认级别为 'silent'。
+ *   可在控制台或代码中通过 setLogLevel 动态调整，
  *   例如排查问题时设置为 'debug' 以输出更详细的信息：
  *   import { setLogLevel } from '@/lib/logger';
  *   setLogLevel('debug');
@@ -29,7 +30,7 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
 };
 
 /** 当前全局日志级别 */
-let currentLevel: LogLevel = 'info';
+let currentLevel: LogLevel = import.meta.env.PROD ? 'silent' : 'info';
 
 /**
  * 设置全局日志级别

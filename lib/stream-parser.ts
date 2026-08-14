@@ -12,6 +12,9 @@
  */
 
 import type { StreamChunk } from '../types';
+import { createLogger } from './logger';
+
+const logger = createLogger('SSE 解析器');
 
 /**
  * 解析一行 SSE 数据
@@ -38,7 +41,7 @@ export function parseSSELine(line: string): StreamChunk | '[DONE]' | null {
       return JSON.parse(data) as StreamChunk;
     } catch {
       // JSON 解析失败，跳过此行
-      console.warn('[翻译扩展] SSE 数据解析失败:', data.slice(0, 100));
+      logger.warn('SSE 数据解析失败:', data.slice(0, 100));
       return null;
     }
   }
