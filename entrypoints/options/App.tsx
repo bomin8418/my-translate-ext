@@ -127,6 +127,13 @@ const Options: React.FC = () => {
     []
   );
 
+  const handleInterceptPdfChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setSettings((prev) => ({ ...prev, interceptPdf: e.target.checked }));
+    },
+    []
+  );
+
   // ==================== 保存设置 ====================
   const handleSave = useCallback(async () => {
     // 表单验证
@@ -355,6 +362,26 @@ const Options: React.FC = () => {
             </select>
           </div>
 
+          {/* 6. PDF 打开方式 */}
+          <div className="flex items-start gap-3 rounded-lg border border-gray-200 p-4">
+            <input
+              type="checkbox"
+              id="intercept-pdf"
+              checked={settings.interceptPdf}
+              onChange={handleInterceptPdfChange}
+              className="mt-1 h-4 w-4 text-blue-600 border-gray-300 rounded
+                         focus:ring-blue-500"
+            />
+            <div>
+              <label htmlFor="intercept-pdf" className="block text-sm font-medium text-gray-700">
+                使用扩展内置 PDF 查看器
+              </label>
+              <p className="text-xs text-gray-400 mt-1">
+                关闭时，PDF 会在浏览器主界面中使用原生查看器打开；开启后才会跳转到扩展内置查看器。
+              </p>
+            </div>
+          </div>
+
           {/* 保存按钮 */}
           <div className="pt-2">
             <button
@@ -438,7 +465,7 @@ const Options: React.FC = () => {
             </li>
             <li className="flex gap-2">
               <span className="text-blue-500">6.</span>
-              PDF 文件会自动使用扩展内置查看器，支持全文翻译
+              PDF 默认在浏览器原生查看器中打开；开启下方选项后才会使用扩展内置查看器
             </li>
           </ul>
         </div>
@@ -449,14 +476,13 @@ const Options: React.FC = () => {
             📄 PDF 翻译说明
           </h2>
           <p className="text-sm text-amber-700 leading-relaxed">
-            本扩展已注册为 PDF 处理程序（Chrome 151+）。直接打开本地 PDF（
-            <code className="bg-amber-100 px-1 rounded">file://</code>
-            开头，例如双击打开的 PDF）或在线 PDF，会自动进入扩展内置查看器并自动翻译，无需开启「允许访问文件网址」。
+            默认情况下，PDF 会直接在浏览器主界面中由原生查看器打开，保留导航、缩放、搜索等功能。开启「使用扩展内置 PDF 查看器」后，扩展才会拦截 PDF 并打开内置查看器；进入查看器后仍需点击「开始翻译 PDF」才会翻译。
           </p>
           <ul className="mt-2 space-y-1 text-sm text-amber-700 list-disc list-inside">
-            <li>首次打开 PDF 时若 Chrome 弹出选择方式，请选择「个人专属翻译助手」</li>
-            <li>若仍显示 Chrome 内置查看器，请重新加载扩展后再打开 PDF</li>
-            <li>Chrome 151 以下版本：需在 <code className="bg-amber-100 px-1 rounded">chrome://extensions</code> 开启「允许访问文件网址」</li>
+            <li>如需翻译本地 PDF，请在 <code className="bg-amber-100 px-1 rounded">chrome://extensions</code> 为该扩展开启「允许访问文件网址」</li>
+            <li>在线 PDF 通常无需额外文件访问权限</li>
+            <li>也可以在任意网页右键点击，使用「开启PDF翻译模式 / 关闭PDF翻译模式」快速切换</li>
+            <li>在 PDF 页面切换后扩展会自动刷新页面以应用设置，无需手动刷新</li>
           </ul>
           <p className="mt-3 text-xs text-amber-600">
             打开 PDF 后若无反应，可右键查看器页面选择「检查」，在 Console 查看日志。

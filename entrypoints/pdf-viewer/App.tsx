@@ -2,7 +2,7 @@
  * PDF 查看器 - 使用 pdf.js 渲染 PDF 并支持双语翻译
  *
  * 功能：
- * 1. 通过 chrome.mimeHandler 接管 PDF（Chrome 151+，兼容 URL 参数降级路径）
+ * 1. 优先通过 chrome.mimeHandler 读取流，不支持时回退到 ?url= 参数模式
  * 2. 使用 pdf.js 渲染 PDF 页面到 Canvas
  * 3. 提取 PDF 文本内容
  * 4. 支持双语翻译显示（提取英文文本 → 翻译为中文）
@@ -166,8 +166,8 @@ const PdfViewer: React.FC = () => {
       setPdfDoc(doc);
       setTotalPages(doc.numPages);
       setCurrentPage(1);
-      // 加载成功后自动开启翻译，避免用户找不到翻译入口
-      setTranslationEnabled(true);
+      // 加载成功后不自动触发插件功能，等待用户点击“开始翻译”按钮
+      setTranslationEnabled(false);
       logger.info('PDF 加载成功', { pages: doc.numPages, url });
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'PDF 加载失败';
@@ -218,8 +218,8 @@ const PdfViewer: React.FC = () => {
         setPdfDoc(doc);
         setTotalPages(doc.numPages);
         setCurrentPage(1);
-        // 加载成功后自动开启翻译
-        setTranslationEnabled(true);
+        // 加载成功后不自动触发插件功能，等待用户点击“开始翻译”按钮
+        setTranslationEnabled(false);
         logger.info('PDF 通过 MIME 流加载成功', {
           pages: doc.numPages,
           displayUrl,
@@ -768,6 +768,33 @@ const PdfViewer: React.FC = () => {
               />
             </div>
           </div>
+
+          {/* 用户明确触发翻译的醒目按钮 */}
+          {!translationEnabled && !isTranslating && (
+            <div className="bg-white rounded-xl shadow-lg border border-blue-100 p-6 flex flex-col items-center text-center gap-4">
+              <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center text-2xl">
+                🌐
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-gray-800">
+                  PDF 已加载，需要翻译内容吗？
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  点击下方按钮后，将提取当前页文本并显示双语翻译。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={toggleTranslation}
+                className="px-6 py-3 bg-blue-600 hover:bg-blue-700 active:bg-blue-800
+                           text-white font-semibold rounded-lg shadow-sm
+                           focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
+                           transition-colors"
+              >
+                🚀 开始翻译 PDF
+              </button>
+            </div>
+          )}
 
           {/* 翻译结果区域 */}
           {translationEnabled && (

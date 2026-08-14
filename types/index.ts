@@ -12,6 +12,7 @@ export interface Settings {
   apiKey: string;         // API 密钥
   modelName: string;      // 模型名称（如 gpt-4o-mini、deepseek-chat 等）
   targetLang: string;     // 目标语言，默认 "Chinese"
+  interceptPdf: boolean;  // 是否拦截 PDF 并打开扩展内置查看器
 }
 
 /** 默认设置 */
@@ -21,6 +22,7 @@ export const DEFAULT_SETTINGS: Settings = {
   apiKey: '',
   modelName: 'gpt-4o-mini',
   targetLang: 'Chinese',
+  interceptPdf: false,
 };
 
 // ==================== 消息通信协议 ====================
