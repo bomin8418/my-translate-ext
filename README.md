@@ -2,6 +2,24 @@
 
 基于 LLM API 的网页翻译扩展，支持划词翻译、全文双语显示、仅译文全文翻译和 PDF 全文翻译。
 
+## 下载与安装
+
+当前发布版本：[v1.0.0](https://github.com/bomin8418/my-translate-ext/releases/tag/v1.0.0)
+
+Chrome 用户可以直接下载已打包的扩展：
+
+[下载 my-translate-ext-1.0.0-chrome.zip](https://github.com/bomin8418/my-translate-ext/releases/download/v1.0.0/my-translate-ext-1.0.0-chrome.zip)
+
+安装步骤：
+
+1. 下载并解压 zip。
+2. 打开 Chrome，在地址栏输入 `chrome://extensions`。
+3. 开启右上角的「开发者模式」。
+4. 点击「加载已解压的扩展程序」，选择解压后的文件夹。
+5. 点击工具栏中的扩展图标，填写 API Key / Base URL / 模型并保存。
+
+> 当前 Release 只提供 Chrome Manifest V3 包；Firefox 包可参考下方“开发与构建”使用 `npm run zip:firefox` 生成。
+
 ## 功能
 
 - 划词翻译：选中文本后自动弹出翻译气泡
