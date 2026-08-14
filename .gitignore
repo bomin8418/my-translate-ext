@@ -14,6 +14,10 @@ stats-*.json
 .wxt
 web-ext.config.ts
 
+# Local AI agent workspaces
+.trae/
+.workbuddy/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
